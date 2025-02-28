@@ -11,93 +11,19 @@ export const manuallyMatchRideRequest = async (
   console.log(`Manually matching request ${requestId} with ride ${rideId}`);
 
   try {
-    // 1. Get the ride and request details
-    const { data: ride, error: rideError } = await supabase
-      .from("rides")
-      .select("*")
-      .eq("id", rideId)
-      .single();
+    // Call the backend RPC function for manual matching
+    const { data, error } = await supabase.rpc("manual_match_ride_request", {
+      p_request_id: requestId,
+      p_ride_id: rideId,
+    });
 
-    if (rideError) {
-      console.error("Error fetching ride:", rideError);
-      return { success: false, error: rideError };
+    if (error) {
+      console.error("Error in manual ride matching:", error);
+      return { success: false, error };
     }
 
-    const { data: request, error: requestError } = await supabase
-      .from("ride_requests")
-      .select("*")
-      .eq("id", requestId)
-      .single();
-
-    if (requestError) {
-      console.error("Error fetching request:", requestError);
-      return { success: false, error: requestError };
-    }
-
-    // 2. Update the ride request
-    const { data: updatedRequest, error: updateRequestError } = await supabase
-      .from("ride_requests")
-      .update({
-        ride_id: rideId,
-        status: "accepted",
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", requestId)
-      .select();
-
-    if (updateRequestError) {
-      console.error("Error updating ride request:", updateRequestError);
-      return { success: false, error: updateRequestError };
-    }
-
-    // 3. Update the ride's available seats
-    const seatsNeeded = request.seats_needed || 1;
-    const newSeatsAvailable = Math.max(0, ride.seats_available - seatsNeeded);
-
-    const { data: updatedRide, error: updateRideError } = await supabase
-      .from("rides")
-      .update({
-        seats_available: newSeatsAvailable,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", rideId)
-      .select();
-
-    if (updateRideError) {
-      console.error("Error updating ride:", updateRideError);
-      return { success: false, error: updateRideError };
-    }
-
-    // 4. Create notifications
-    const { error: notificationError } = await supabase
-      .from("notifications")
-      .insert([
-        {
-          user_id: ride.driver_id,
-          title: "New Passenger Matched",
-          message: `A new passenger has been matched to your ride (Request #${requestId.substring(0, 8)})`,
-          type: "ride_matched",
-        },
-        {
-          user_id: request.rider_id,
-          title: "Ride Matched",
-          message: `You have been matched with a driver for your ride (Request #${requestId.substring(0, 8)})`,
-          type: "ride_matched",
-        },
-      ]);
-
-    if (notificationError) {
-      console.error("Error creating notifications:", notificationError);
-      // Continue anyway, notifications are not critical
-    }
-
-    return {
-      success: true,
-      data: {
-        request: updatedRequest,
-        ride: updatedRide,
-      },
-    };
+    console.log("Successfully matched ride request:", data);
+    return { success: true, data };
   } catch (error) {
     console.error("Exception in manual ride matching:", error);
     return { success: false, error };
@@ -138,7 +64,12 @@ export const getAcceptedRideRequests = async (driverId: string) => {
       `,
       )
       .in("ride_id", rideIds)
-      .eq("status", "accepted");
+      .in("status", [
+        "accepted",
+        "driver_accepted",
+        "in_progress",
+        "picked_up",
+      ]);
 
     if (requestsError) {
       console.error("Error fetching ride requests:", requestsError);
@@ -148,6 +79,61 @@ export const getAcceptedRideRequests = async (driverId: string) => {
     return { success: true, data: requests || [] };
   } catch (error) {
     console.error("Exception in getAcceptedRideRequests:", error);
+    return { success: false, error };
+  }
+};
+
+/**
+ * Fix a ride request that has matching issues
+ */
+export const fixRideRequest = async (requestId: string, rideId: string) => {
+  try {
+    console.log(`Fixing ride request ${requestId} for ride ${rideId}`);
+
+    // Direct database update with explicit status
+    const { data, error } = await supabase
+      .from("ride_requests")
+      .update({
+        ride_id: rideId,
+        status: "accepted",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", requestId)
+      .select();
+
+    if (error) {
+      console.error("Error fixing ride request:", error);
+      return { success: false, error };
+    }
+
+    console.log("Successfully fixed ride request:", data);
+    return { success: true, data };
+  } catch (error) {
+    console.error("Exception fixing ride request:", error);
+    return { success: false, error };
+  }
+};
+
+/**
+ * Check the status of a ride request
+ */
+export const checkRideRequest = async (requestId: string) => {
+  try {
+    const { data, error } = await supabase
+      .from("ride_requests")
+      .select("*")
+      .eq("id", requestId)
+      .single();
+
+    if (error) {
+      console.error("Error checking ride request:", error);
+      return { success: false, error };
+    }
+
+    console.log("Ride request status:", data);
+    return { success: true, data };
+  } catch (error) {
+    console.error("Exception checking ride request:", error);
     return { success: false, error };
   }
 };

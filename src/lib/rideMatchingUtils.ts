@@ -2,7 +2,7 @@ import { supabase } from "./supabase";
 
 /**
  * Utility function to get passenger ride details
- * This uses the new backend function get_passenger_ride_details
+ * This uses the backend function get_passenger_ride_details
  */
 export const getPassengerRideDetails = async (passengerId: string) => {
   try {
@@ -69,7 +69,7 @@ export const getPassengerRideDetails = async (passengerId: string) => {
 
 /**
  * Utility function to get upcoming rides for a driver
- * This uses the new backend function get_upcoming_rides
+ * This uses the backend function get_upcoming_rides
  */
 export const getUpcomingRides = async (driverId: string) => {
   try {
@@ -91,7 +91,7 @@ export const getUpcomingRides = async (driverId: string) => {
 
 /**
  * Utility function to start a ride
- * This uses the new backend function start_ride
+ * This uses the backend function start_ride
  */
 export const startRide = async (rideId: string) => {
   try {
@@ -108,5 +108,122 @@ export const startRide = async (rideId: string) => {
   } catch (error) {
     console.error("Exception in startRide:", error);
     return { success: false, error };
+  }
+};
+
+/**
+ * Utility function to complete a ride
+ * This uses the backend function complete_ride
+ */
+export const completeRide = async (rideId: string) => {
+  try {
+    const { data, error } = await supabase.rpc("complete_ride", {
+      p_ride_id: rideId,
+    });
+
+    if (error) {
+      console.error("Error completing ride:", error);
+      return { success: false, error };
+    }
+
+    return { success: true };
+  } catch (error) {
+    console.error("Exception in completeRide:", error);
+    return { success: false, error };
+  }
+};
+
+/**
+ * Cancel a ride request
+ */
+export const cancelRideRequest = async (
+  requestId: string,
+  reason: string = "Cancelled by user",
+) => {
+  try {
+    const { data, error } = await supabase.rpc("cancel_ride_request", {
+      p_request_id: requestId,
+      p_reason: reason,
+    });
+
+    if (error) {
+      console.error("Error cancelling ride request:", error);
+      return { success: false, error };
+    }
+
+    return { success: true };
+  } catch (error) {
+    console.error("Exception in cancelRideRequest:", error);
+    return { success: false, error };
+  }
+};
+
+/**
+ * Cancel a ride
+ */
+export const cancelRide = async (
+  rideId: string,
+  reason: string = "Cancelled by driver",
+) => {
+  try {
+    const { data, error } = await supabase.rpc("cancel_ride", {
+      p_ride_id: rideId,
+      p_reason: reason,
+    });
+
+    if (error) {
+      console.error("Error cancelling ride:", error);
+      return { success: false, error };
+    }
+
+    return { success: true };
+  } catch (error) {
+    console.error("Exception in cancelRide:", error);
+    return { success: false, error };
+  }
+};
+
+/**
+ * Find matching passengers for a ride
+ */
+export const findPassengersForRide = async (rideId: string) => {
+  try {
+    const { data, error } = await supabase.rpc("find_passengers_for_ride", {
+      p_ride_id: rideId,
+    });
+
+    if (error) {
+      console.error("Error finding passengers:", error);
+      return { success: false, error, matchCount: 0 };
+    }
+
+    return { success: true, matchCount: data || 0 };
+  } catch (error) {
+    console.error("Exception in findPassengersForRide:", error);
+    return { success: false, error, matchCount: 0 };
+  }
+};
+
+/**
+ * Attempt to automatically match a passenger with a driver
+ */
+export const autoMatchPassenger = async (requestId: string) => {
+  try {
+    const { data, error } = await supabase.rpc(
+      "auto_match_passenger_with_driver",
+      {
+        p_request_id: requestId,
+      },
+    );
+
+    if (error) {
+      console.error("Error auto-matching passenger:", error);
+      return { success: false, error, matched: false };
+    }
+
+    return { success: true, matched: !!data };
+  } catch (error) {
+    console.error("Exception in autoMatchPassenger:", error);
+    return { success: false, error, matched: false };
   }
 };

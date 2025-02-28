@@ -20,6 +20,58 @@ export const calculateDistance = (
   return R * c;
 };
 
+/**
+ * Calculate bearing between two points
+ * @returns Bearing in degrees (0-360)
+ */
+export const calculateBearing = (
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number,
+): number => {
+  const startLat = (lat1 * Math.PI) / 180;
+  const startLng = (lon1 * Math.PI) / 180;
+  const destLat = (lat2 * Math.PI) / 180;
+  const destLng = (lon2 * Math.PI) / 180;
+
+  const y = Math.sin(destLng - startLng) * Math.cos(destLat);
+  const x =
+    Math.cos(startLat) * Math.sin(destLat) -
+    Math.sin(startLat) * Math.cos(destLat) * Math.cos(destLng - startLng);
+  let brng = (Math.atan2(y, x) * 180) / Math.PI;
+
+  // Normalize to 0-360
+  return (brng + 360) % 360;
+};
+
+/**
+ * Check if two routes are going in a similar direction
+ * @returns true if routes are within the acceptable angle difference
+ */
+export const isRouteDirectionSimilar = (
+  startLat1: number,
+  startLon1: number,
+  endLat1: number,
+  endLon1: number,
+  startLat2: number,
+  startLon2: number,
+  endLat2: number,
+  endLon2: number,
+  maxAngleDifference: number = 30,
+): boolean => {
+  const bearing1 = calculateBearing(startLat1, startLon1, endLat1, endLon1);
+  const bearing2 = calculateBearing(startLat2, startLon2, endLat2, endLon2);
+
+  const angleDiff = Math.min(
+    Math.abs(bearing1 - bearing2),
+    Math.abs(bearing1 - bearing2 + 360),
+    Math.abs(bearing1 - bearing2 - 360),
+  );
+
+  return angleDiff <= maxAngleDifference;
+};
+
 // Check if a ride matches with a request based on route overlap and timing
 export const isRideMatch = (
   ride: any,
@@ -41,6 +93,23 @@ export const isRideMatch = (
       time: request.scheduled_time,
     },
   });
+
+  // First, check if routes are going in similar directions
+  const routesSimilar = isRouteDirectionSimilar(
+    ride.pickup_latitude,
+    ride.pickup_longitude,
+    ride.destination_latitude,
+    ride.destination_longitude,
+    request.pickup_latitude,
+    request.pickup_longitude,
+    request.destination_latitude,
+    request.destination_longitude,
+  );
+
+  if (!routesSimilar) {
+    console.log("Routes are not going in a similar direction");
+    return false;
+  }
 
   // Calculate distances
   const pickupDetour = calculateDistance(
@@ -101,6 +170,69 @@ export const isRideMatch = (
   return isMatch;
 };
 
+/**
+ * Calculate a match score between a ride and a request
+ * Higher score means better match
+ * @returns A score between 0 and 1
+ */
+export const calculateMatchScore = (
+  ride: any,
+  request: any,
+  maxDetourKm: number = 5,
+  maxTimeDiffMinutes: number = 30,
+): number => {
+  // Check if routes are going in similar directions
+  if (
+    !isRouteDirectionSimilar(
+      ride.pickup_latitude,
+      ride.pickup_longitude,
+      ride.destination_latitude,
+      ride.destination_longitude,
+      request.pickup_latitude,
+      request.pickup_longitude,
+      request.destination_latitude,
+      request.destination_longitude,
+    )
+  ) {
+    return 0; // Return 0 score if routes are not going in similar directions
+  }
+
+  // Calculate pickup and dropoff detour distances
+  const pickupDetour = calculateDistance(
+    ride.pickup_latitude,
+    ride.pickup_longitude,
+    request.pickup_latitude,
+    request.pickup_longitude,
+  );
+
+  const dropoffDetour = calculateDistance(
+    ride.destination_latitude,
+    ride.destination_longitude,
+    request.destination_latitude,
+    request.destination_longitude,
+  );
+
+  // Check timing
+  const rideDate = new Date(ride.scheduled_time);
+  const requestDate = new Date(request.scheduled_time);
+  const timeDiff =
+    Math.abs(rideDate.getTime() - requestDate.getTime()) / (1000 * 60);
+
+  // Calculate normalized scores for each component (1 = perfect match, 0 = worst match)
+  const directionalMatchScore = 0.6; // Since we've already verified directions are similar
+  const distanceScore =
+    1 - Math.min(1, (pickupDetour + dropoffDetour) / maxDetourKm);
+  const timeScore = 1 - Math.min(1, timeDiff / maxTimeDiffMinutes);
+
+  // Calculate weighted total score (0-1)
+  const totalScore =
+    directionalMatchScore * 0.6 + // Direction is 60% of the score
+    distanceScore * 0.2 + // Distance is 20% of the score
+    timeScore * 0.2; // Time is 20% of the score
+
+  return totalScore;
+};
+
 // Find matching rides for a request
 export const findMatchingRides = async (requestId: string) => {
   // Get the request details
@@ -125,9 +257,15 @@ export const findMatchingRides = async (requestId: string) => {
     throw new Error("Failed to fetch potential rides");
   }
 
-  // Filter rides based on route matching
+  // Filter rides based on route matching and calculate scores
   const matchingRides =
-    rides?.filter((ride) => isRideMatch(ride, request)) || [];
+    rides
+      ?.map((ride) => ({
+        ride,
+        score: calculateMatchScore(ride, request),
+      }))
+      .filter((item) => item.score >= 0.65) // Only include rides with a score above threshold
+      .sort((a, b) => b.score - a.score) || []; // Sort by score descending
 
   console.log(
     `Found ${matchingRides.length} matching rides for request ${requestId}`,
@@ -140,50 +278,18 @@ export const matchRideWithRequest = async (
   rideId: string,
   requestId: string,
 ) => {
-  const { data: ride, error: rideError } = await supabase
-    .from("rides")
-    .select("*")
-    .eq("id", rideId)
-    .single();
+  try {
+    // Call the manual_match_ride_request RPC function
+    const { data, error } = await supabase.rpc("manual_match_ride_request", {
+      p_ride_id: rideId,
+      p_request_id: requestId,
+    });
 
-  if (rideError || !ride) {
-    throw new Error("Failed to fetch ride details");
+    if (error) throw error;
+
+    return { success: true, data };
+  } catch (error) {
+    console.error("Error matching ride with request:", error);
+    throw error;
   }
-
-  const { data: request, error: requestError } = await supabase
-    .from("ride_requests")
-    .select("*")
-    .eq("id", requestId)
-    .single();
-
-  if (requestError || !request) {
-    throw new Error("Failed to fetch request details");
-  }
-
-  // Start a transaction to update both ride and request
-  const { error: updateError } = await supabase.rpc("match_ride_with_request", {
-    p_ride_id: rideId,
-    p_request_id: requestId,
-    p_seats_needed: request.seats_needed,
-  });
-
-  if (updateError) {
-    throw new Error("Failed to match ride with request");
-  }
-
-  // Create notifications for both driver and rider
-  await supabase.from("notifications").insert([
-    {
-      user_id: ride.driver_id,
-      title: "New Passenger Matched",
-      message: `A new passenger has been matched to your ride scheduled for ${new Date(ride.scheduled_time).toLocaleString()}`,
-      type: "ride_matched",
-    },
-    {
-      user_id: request.rider_id,
-      title: "Ride Matched",
-      message: `You have been matched with a driver for your ride scheduled for ${new Date(request.scheduled_time).toLocaleString()}`,
-      type: "ride_matched",
-    },
-  ]);
 };
