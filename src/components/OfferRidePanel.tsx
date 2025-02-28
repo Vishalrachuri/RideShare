@@ -17,6 +17,7 @@ import { useAuth } from "@/lib/AuthContext";
 import { supabase } from "@/lib/supabase";
 import { RadioGroup, RadioGroupItem } from "./ui/radio-group";
 import { Label } from "./ui/label";
+import { useToast } from "./ui/use-toast";
 
 interface OfferRidePanelProps {
   onLocationSelect?: (
@@ -29,6 +30,7 @@ const OfferRidePanel = ({
   onLocationSelect = () => {},
 }: OfferRidePanelProps) => {
   const { user } = useAuth();
+  const { toast } = useToast();
   const [pickup, setPickup] = React.useState("");
   const [dropoff, setDropoff] = React.useState("");
   const [date, setDate] = React.useState<Date>(new Date());
@@ -42,6 +44,7 @@ const OfferRidePanel = ({
     lat: number;
     lng: number;
   } | null>(null);
+  const [loading, setLoading] = React.useState(false);
 
   const pickupRef = React.useRef<HTMLInputElement>(null);
   const dropoffRef = React.useRef<HTMLInputElement>(null);
@@ -96,6 +99,8 @@ const OfferRidePanel = ({
 
   const handleOfferRide = async () => {
     if (!pickupCoords || !dropoffCoords || !user) return;
+
+    setLoading(true);
 
     try {
       // First ensure user exists in users table
@@ -160,14 +165,20 @@ const OfferRidePanel = ({
         console.error("Error calculating route details:", error);
       }
 
+      const scheduledTime = timeType === "now" ? new Date() : date;
+
+      // Make sure scheduledTime is at least now
+      if (scheduledTime < new Date()) {
+        scheduledTime.setMinutes(new Date().getMinutes() + 5);
+      }
+
       const rideData = {
         driver_id: user.id,
         pickup_latitude: pickupCoords.lat,
         pickup_longitude: pickupCoords.lng,
         destination_latitude: dropoffCoords.lat,
         destination_longitude: dropoffCoords.lng,
-        scheduled_time:
-          timeType === "now" ? new Date().toISOString() : date.toISOString(),
+        scheduled_time: scheduledTime.toISOString(),
         seats_available: parseInt(seats),
         status: "pending",
         route_geometry: routeGeometry,
@@ -202,7 +213,20 @@ const OfferRidePanel = ({
         if (matchError) {
           console.error("Error finding matching passengers:", matchError);
         } else {
-          console.log(`Found ${matchResult} matching passengers for this ride`);
+          if (matchResult > 0) {
+            toast({
+              title: "Ride Offered Successfully!",
+              description: `Found ${matchResult} matching passenger(s) for your ride!`,
+              variant: "default",
+            });
+          } else {
+            toast({
+              title: "Ride Offered Successfully!",
+              description:
+                "No matching passengers found yet. The system will automatically match you with passengers going in the same direction.",
+              variant: "default",
+            });
+          }
         }
       }
 
@@ -212,12 +236,15 @@ const OfferRidePanel = ({
       setPickupCoords(null);
       setDropoffCoords(null);
       setSeats("4");
-      alert(
-        "Ride offered successfully! The system will automatically match you with passengers going in the same direction.",
-      );
     } catch (error: any) {
       console.error("Error offering ride:", error);
-      alert(error.message || "Failed to offer ride");
+      toast({
+        title: "Error",
+        description: error.message || "Failed to offer ride",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -225,16 +252,23 @@ const OfferRidePanel = ({
     <Card className="w-[400px] p-4 bg-white">
       <div className="space-y-4">
         <div className="space-y-2">
+          <Label htmlFor="pickup">Pickup location</Label>
           <Input
+            id="pickup"
             ref={pickupRef}
-            placeholder="Pickup location"
+            placeholder="Enter pickup location"
             value={pickup}
             onChange={(e) => setPickup(e.target.value)}
             className="w-full"
           />
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="dropoff">Dropoff location</Label>
           <Input
+            id="dropoff"
             ref={dropoffRef}
-            placeholder="Dropoff location"
+            placeholder="Enter dropoff location"
             value={dropoff}
             onChange={(e) => setDropoff(e.target.value)}
             className="w-full"
@@ -279,8 +313,8 @@ const OfferRidePanel = ({
                     if (date) {
                       // Preserve the current time when changing date
                       const newDate = new Date(date);
-                      newDate.setHours(date.getHours());
-                      newDate.setMinutes(date.getMinutes());
+                      newDate.setHours(new Date().getHours());
+                      newDate.setMinutes(new Date().getMinutes());
                       setDate(newDate);
                     }
                   }}
@@ -353,10 +387,10 @@ const OfferRidePanel = ({
         <Button
           className="w-full"
           onClick={handleOfferRide}
-          disabled={!pickupCoords || !dropoffCoords}
+          disabled={!pickupCoords || !dropoffCoords || loading}
         >
           <Car className="mr-2 h-4 w-4" />
-          Offer Ride
+          {loading ? "Creating Ride..." : "Offer Ride"}
         </Button>
         <p className="text-xs text-muted-foreground text-center mt-2">
           Your ride will be automatically matched with passengers going in the

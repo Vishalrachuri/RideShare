@@ -6,6 +6,8 @@ import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
 import { MapPin, Clock, Users } from "lucide-react";
 import AutomaticMatchingInfo from "./AutomaticMatchingInfo";
+import RideStatusDisplay from "./RideStatusDisplay";
+import LocationDisplay from "./LocationDisplay";
 
 interface DriverPanelProps {
   className?: string;
@@ -14,18 +16,19 @@ interface DriverPanelProps {
 const DriverPanel = ({ className = "" }: DriverPanelProps) => {
   const { user } = useAuth();
   const [activeRide, setActiveRide] = React.useState<any>(null);
-  const [rideRequests, setRideRequests] = React.useState<any[]>([]);
+  const [matchedRequests, setMatchedRequests] = React.useState<any[]>([]);
   const [loading, setLoading] = React.useState(true);
 
   React.useEffect(() => {
     if (!user) return;
 
     const loadActiveRide = async () => {
+      // Get the driver's active ride
       const { data, error } = await supabase
         .from("rides")
         .select("*")
         .eq("driver_id", user.id)
-        .eq("status", "pending")
+        .in("status", ["pending", "accepted", "in_progress"])
         .order("created_at", { ascending: false })
         .limit(1);
 
@@ -36,12 +39,12 @@ const DriverPanel = ({ className = "" }: DriverPanelProps) => {
 
       if (data && data.length > 0) {
         setActiveRide(data[0]);
-        loadAcceptedRequests(data[0].id);
+        loadMatchedRequests(data[0].id);
       }
       setLoading(false);
     };
 
-    const loadAcceptedRequests = async (rideId: string) => {
+    const loadMatchedRequests = async (rideId: string) => {
       // Get all accepted ride requests for this ride
       const { data, error } = await supabase
         .from("ride_requests")
@@ -52,16 +55,16 @@ const DriverPanel = ({ className = "" }: DriverPanelProps) => {
         `,
         )
         .eq("ride_id", rideId)
-        .in("status", ["accepted", "in_progress"])
+        .in("status", ["accepted", "in_progress", "picked_up"])
         .order("created_at", { ascending: false });
 
       if (error) {
-        console.error("Error loading accepted requests:", error);
+        console.error("Error loading matched requests:", error);
         return;
       }
 
-      console.log("Loaded accepted requests for ride:", data?.length || 0);
-      setRideRequests(data || []);
+      console.log("Loaded matched requests for ride:", data?.length || 0);
+      setMatchedRequests(data || []);
     };
 
     loadActiveRide();
@@ -78,7 +81,7 @@ const DriverPanel = ({ className = "" }: DriverPanelProps) => {
         },
         (payload) => {
           if (activeRide) {
-            loadAcceptedRequests(activeRide.id);
+            loadMatchedRequests(activeRide.id);
           }
         },
       )
@@ -88,6 +91,50 @@ const DriverPanel = ({ className = "" }: DriverPanelProps) => {
       supabase.removeChannel(channel);
     };
   }, [user]);
+
+  // Try to find matches for the current ride
+  const findMatches = async () => {
+    if (!activeRide) return;
+
+    try {
+      setLoading(true);
+      // Call the function to find passengers for this ride
+      const { data, error } = await supabase.rpc("find_passengers_for_ride", {
+        p_ride_id: activeRide.id,
+      });
+
+      if (error) throw error;
+
+      // Refresh the matched requests
+      if (activeRide) {
+        const { data: refreshedData, error: refreshError } = await supabase
+          .from("ride_requests")
+          .select(
+            `
+            *,
+            rider:rider_id (id, full_name)
+          `,
+          )
+          .eq("ride_id", activeRide.id)
+          .in("status", ["accepted", "in_progress", "picked_up"])
+          .order("created_at", { ascending: false });
+
+        if (!refreshError && refreshedData) {
+          setMatchedRequests(refreshedData);
+        }
+      }
+
+      if (data === 0) {
+        alert("No new matches found at this time. We'll keep searching.");
+      } else {
+        alert(`Found ${data} new matches!`);
+      }
+    } catch (error) {
+      console.error("Error finding matches:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // View passenger details that were automatically matched
   const handleViewDetails = (request: any) => {
@@ -100,6 +147,29 @@ const DriverPanel = ({ className = "" }: DriverPanelProps) => {
         `This passenger was automatically matched with your ride based on route overlap.\n\n` +
         `After you press Start Ride, you'll be navigated to the first pickup location.`,
     );
+  };
+
+  const startRide = async () => {
+    if (!activeRide) return;
+
+    try {
+      const { data, error } = await supabase.rpc("start_ride", {
+        p_ride_id: activeRide.id,
+      });
+
+      if (error) throw error;
+
+      // Update the local state or refresh
+      setActiveRide({
+        ...activeRide,
+        status: "in_progress",
+      });
+
+      alert("Ride started successfully! Navigate to pick up your passengers.");
+    } catch (error) {
+      console.error("Error starting ride:", error);
+      alert("Failed to start the ride. Please try again.");
+    }
   };
 
   if (loading) {
@@ -121,22 +191,63 @@ const DriverPanel = ({ className = "" }: DriverPanelProps) => {
     <Card className={`p-4 ${className}`}>
       <div className="space-y-4">
         <AutomaticMatchingInfo />
+
         <div className="flex justify-between items-center">
-          <h3 className="font-semibold">Matched Passengers</h3>
-          <Badge variant="outline">{rideRequests.length} passengers</Badge>
+          <h3 className="font-semibold">Your Active Ride</h3>
+          <RideStatusDisplay status={activeRide.status} />
         </div>
 
-        {rideRequests.length === 0 ? (
+        <div className="space-y-2">
+          <LocationDisplay
+            lat={activeRide.pickup_latitude}
+            lng={activeRide.pickup_longitude}
+            icon={<MapPin className="h-4 w-4" />}
+            label="Pickup"
+          />
+          <LocationDisplay
+            lat={activeRide.destination_latitude}
+            lng={activeRide.destination_longitude}
+            icon={<MapPin className="h-4 w-4" />}
+            label="Destination"
+          />
+          <div className="flex items-center gap-2">
+            <Clock className="h-4 w-4" />
+            <span>{new Date(activeRide.scheduled_time).toLocaleString()}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Users className="h-4 w-4" />
+            <span>{activeRide.seats_available} seats available</span>
+          </div>
+        </div>
+
+        <div className="flex gap-2">
+          <Button className="flex-1" onClick={findMatches} disabled={loading}>
+            Find Passengers
+          </Button>
+
+          {activeRide.status === "pending" && matchedRequests.length > 0 && (
+            <Button className="flex-1" onClick={startRide} variant="default">
+              Start Ride
+            </Button>
+          )}
+        </div>
+
+        <div className="flex justify-between items-center mt-6">
+          <h3 className="font-semibold">Matched Passengers</h3>
+          <Badge variant="outline">{matchedRequests.length} passengers</Badge>
+        </div>
+
+        {matchedRequests.length === 0 ? (
           <div className="text-center py-4">
             <p className="text-muted-foreground">No passengers matched yet</p>
             <p className="text-xs text-muted-foreground mt-2">
               The system will automatically match passengers with your ride
-              based on route overlap
+              based on route overlap. Click "Find Passengers" to search.
             </p>
           </div>
         ) : (
           <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2">
-            {rideRequests.map((request) => (
+            {matchedRequests.map((request) => (
               <Card key={request.id} className="p-3">
                 <div className="flex justify-between items-start mb-2">
                   <div>
@@ -147,33 +258,21 @@ const DriverPanel = ({ className = "" }: DriverPanelProps) => {
                       Request #{request.id.slice(0, 8)}
                     </p>
                   </div>
-                  <Badge variant="success">Matched</Badge>
+                  <RideStatusDisplay status={request.status} />
                 </div>
                 <div className="space-y-2 text-sm">
-                  <div className="flex items-start gap-2">
-                    <MapPin className="h-4 w-4 mt-0.5" />
-                    <div>
-                      <span className="text-xs text-muted-foreground">
-                        Pickup
-                      </span>
-                      <p>
-                        {request?.pickup_latitude?.toFixed(4) || 0},{" "}
-                        {request?.pickup_longitude?.toFixed(4) || 0}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-start gap-2">
-                    <MapPin className="h-4 w-4 mt-0.5" />
-                    <div>
-                      <span className="text-xs text-muted-foreground">
-                        Dropoff
-                      </span>
-                      <p>
-                        {request?.destination_latitude?.toFixed(4) || 0},{" "}
-                        {request?.destination_longitude?.toFixed(4) || 0}
-                      </p>
-                    </div>
-                  </div>
+                  <LocationDisplay
+                    lat={request.pickup_latitude}
+                    lng={request.pickup_longitude}
+                    icon={<MapPin className="h-4 w-4" />}
+                    label="Pickup"
+                  />
+                  <LocationDisplay
+                    lat={request.destination_latitude}
+                    lng={request.destination_longitude}
+                    icon={<MapPin className="h-4 w-4" />}
+                    label="Dropoff"
+                  />
                   <div className="flex items-center gap-2">
                     <Clock className="h-4 w-4" />
                     <span>
