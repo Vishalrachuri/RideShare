@@ -1,16 +1,19 @@
 import React from "react";
 import { useAuth } from "@/lib/AuthContext";
 import { supabase } from "@/lib/supabase";
-import DriverDashboard from "@/pages/DriverDashboard";
-import PassengerDashboard from "@/pages/PassengerDashboard";
+import Home from "@/components/home";
 import { useNavigate } from "react-router-dom";
+import { Toaster } from "@/components/ui/toaster";
+import { useToast } from "@/components/ui/use-toast";
 
 const DashboardRouter = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [userType, setUserType] = React.useState<"driver" | "passenger" | null>(
     null,
   );
+  const [userData, setUserData] = React.useState<any>(null);
   const [loading, setLoading] = React.useState(true);
 
   React.useEffect(() => {
@@ -24,8 +27,6 @@ const DashboardRouter = () => {
         // First try to get user type from metadata
         if (user.user_metadata?.user_type) {
           setUserType(user.user_metadata.user_type);
-          setLoading(false);
-          return;
         }
 
         // Then check if user exists in users table
@@ -44,7 +45,8 @@ const DashboardRouter = () => {
             const { error: createError } = await supabase.from("users").insert({
               id: user.id,
               email: user.email,
-              full_name: user.user_metadata?.full_name,
+              full_name: user.user_metadata?.full_name || "New User",
+              user_type: user.user_metadata?.user_type || defaultType,
             });
 
             if (createError) {
@@ -52,20 +54,30 @@ const DashboardRouter = () => {
               throw createError;
             }
 
-            setUserType(defaultType);
-            console.log("Successfully created user with type:", defaultType);
+            setUserType(user.user_metadata?.user_type || defaultType);
+            toast({
+              title: "Welcome to Carpooling!",
+              description: "Your account has been created successfully.",
+              duration: 5000,
+            });
           } else {
             console.error("Error fetching user:", userError);
             throw userError;
           }
         } else if (userData) {
-          console.log("Found existing user");
-          setUserType("passenger"); // Default to passenger
+          setUserData(userData);
+          setUserType(userData.user_type || "passenger");
         }
       } catch (error) {
         console.error("Error in fetchUserType:", error);
-        await supabase.auth.signOut();
-        navigate("/login");
+        toast({
+          title: "Error",
+          description: "There was a problem loading your account information",
+          variant: "destructive",
+        });
+
+        // Don't log out on error, just set default to passenger
+        setUserType("passenger");
       } finally {
         setLoading(false);
       }
@@ -84,7 +96,7 @@ const DashboardRouter = () => {
       };
       checkSession();
     }
-  }, [user, navigate]);
+  }, [user, navigate, toast]);
 
   if (loading) {
     return (
@@ -113,8 +125,19 @@ const DashboardRouter = () => {
     );
   }
 
-  // Return the appropriate dashboard based on user type
-  return userType === "driver" ? <DriverDashboard /> : <PassengerDashboard />;
+  const userName =
+    userData?.full_name || user?.user_metadata?.full_name || "User";
+  const userAvatar =
+    userData?.avatar_url ||
+    `https://api.dicebear.com/7.x/avataaars/svg?seed=${user?.id}`;
+
+  // Return the Home component with user data
+  return (
+    <>
+      <Home userName={userName} userAvatar={userAvatar} userType={userType} />
+      <Toaster />
+    </>
+  );
 };
 
 export default DashboardRouter;

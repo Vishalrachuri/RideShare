@@ -36,6 +36,7 @@ interface MapViewProps {
   userType?: "driver" | "passenger";
   center?: { lat: number; lng: number };
   zoom?: number;
+  activeRide?: any;
   onMapClick?: (event: { lat: number; lng: number }) => void;
 }
 

@@ -12,36 +12,33 @@ import {
   SelectValue,
 } from "./ui/select";
 import { format } from "date-fns";
-import { CalendarIcon, Search } from "lucide-react";
+import { CalendarIcon, Search, Loader2 } from "lucide-react";
 import { useAuth } from "@/lib/AuthContext";
 import { supabase } from "@/lib/supabase";
 import { RadioGroup, RadioGroupItem } from "./ui/radio-group";
 import { Label } from "./ui/label";
+import { useToast } from "@/components/ui/use-toast";
 
 interface RideSearchPanelProps {
   onLocationSelect?: (
     type: "pickup" | "dropoff",
     coords: { lat: number; lng: number },
   ) => void;
+  onRequestCreated?: () => void;
 }
 
 const RideSearchPanel = ({
   onLocationSelect = () => {},
+  onRequestCreated = () => {},
 }: RideSearchPanelProps) => {
   const { user } = useAuth();
+  const { toast } = useToast();
   const [pickup, setPickup] = React.useState("");
   const [dropoff, setDropoff] = React.useState("");
   const [date, setDate] = React.useState<Date>(new Date());
   const [timeType, setTimeType] = React.useState<"now" | "schedule">("now");
   const [searchState, setSearchState] = React.useState<
-    | "initial"
-    | "searching"
-    | "pending"
-    | "accepted"
-    | "in_progress"
-    | "completed"
-    | "cancelled"
-    | "no_show"
+    "initial" | "searching" | "pending" | "completed"
   >("initial");
   const [pickupCoords, setPickupCoords] = React.useState<{
     lat: number;
@@ -51,20 +48,89 @@ const RideSearchPanel = ({
     lat: number;
     lng: number;
   } | null>(null);
-  const [bookingConfirmed, setBookingConfirmed] = React.useState(false);
+  const [seats, setSeats] = React.useState("1");
+  const [existingRequest, setExistingRequest] = React.useState<any>(null);
 
   const pickupRef = React.useRef<HTMLInputElement>(null);
   const dropoffRef = React.useRef<HTMLInputElement>(null);
+
+  // Check for existing ride requests
+  React.useEffect(() => {
+    if (!user) return;
+
+    const checkExistingRequests = async () => {
+      try {
+        const { data, error } = await supabase
+          .from("ride_requests")
+          .select("*")
+          .eq("rider_id", user.id)
+          .in("status", ["pending", "accepted", "in_progress"])
+          .maybeSingle();
+
+        if (error) throw error;
+
+        if (data) {
+          setExistingRequest(data);
+          if (data.pickup_latitude && data.pickup_longitude) {
+            setPickupCoords({
+              lat: data.pickup_latitude,
+              lng: data.pickup_longitude,
+            });
+            onLocationSelect("pickup", {
+              lat: data.pickup_latitude,
+              lng: data.pickup_longitude,
+            });
+          }
+
+          if (data.destination_latitude && data.destination_longitude) {
+            setDropoffCoords({
+              lat: data.destination_latitude,
+              lng: data.destination_longitude,
+            });
+            onLocationSelect("dropoff", {
+              lat: data.destination_latitude,
+              lng: data.destination_longitude,
+            });
+          }
+        }
+      } catch (error) {
+        console.error("Error checking existing requests:", error);
+      }
+    };
+
+    checkExistingRequests();
+
+    // Subscribe to status changes
+    const channel = supabase
+      .channel(`ride_requests_${user.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "ride_requests",
+          filter: `rider_id=eq.${user.id}`,
+        },
+        checkExistingRequests,
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user, onLocationSelect]);
 
   React.useEffect(() => {
     if (!window.google?.maps?.places) return;
 
     const setupAutocomplete = (
-      input: HTMLInputElement,
+      input: HTMLInputElement | null,
       setLocation: (val: string) => void,
       setCoords: (coords: { lat: number; lng: number } | null) => void,
       type: "pickup" | "dropoff",
     ) => {
+      if (!input) return;
+
       const autocomplete = new window.google.maps.places.Autocomplete(input, {
         fields: ["formatted_address", "geometry"],
         types: ["geocode", "establishment"],
@@ -85,27 +151,24 @@ const RideSearchPanel = ({
       });
     };
 
-    if (pickupRef.current) {
-      setupAutocomplete(
-        pickupRef.current,
-        setPickup,
-        setPickupCoords,
-        "pickup",
-      );
-    }
-
-    if (dropoffRef.current) {
-      setupAutocomplete(
-        dropoffRef.current,
-        setDropoff,
-        setDropoffCoords,
-        "dropoff",
-      );
-    }
+    setupAutocomplete(pickupRef.current, setPickup, setPickupCoords, "pickup");
+    setupAutocomplete(
+      dropoffRef.current,
+      setDropoff,
+      setDropoffCoords,
+      "dropoff",
+    );
   }, [onLocationSelect]);
 
   const handleSearch = async () => {
-    if (!pickupCoords || !dropoffCoords || !user) return;
+    if (!pickupCoords || !dropoffCoords || !user) {
+      toast({
+        title: "Missing Information",
+        description: "Please enter both pickup and dropoff locations",
+        variant: "destructive",
+      });
+      return;
+    }
 
     try {
       setSearchState("searching");
@@ -122,11 +185,14 @@ const RideSearchPanel = ({
         const { error: createError } = await supabase.from("users").insert({
           id: user.id,
           email: user.email,
-          full_name: user.user_metadata?.full_name,
+          full_name: user.user_metadata?.full_name || "New User",
         });
 
         if (createError) throw createError;
       }
+
+      // Calculate scheduled time
+      const scheduledTime = timeType === "now" ? new Date() : date;
 
       // Create ride request with auto_match enabled
       const requestData = {
@@ -135,9 +201,8 @@ const RideSearchPanel = ({
         pickup_longitude: pickupCoords.lng,
         destination_latitude: dropoffCoords.lat,
         destination_longitude: dropoffCoords.lng,
-        scheduled_time:
-          timeType === "now" ? new Date().toISOString() : date.toISOString(),
-        seats_needed: 1,
+        scheduled_time: scheduledTime.toISOString(),
+        seats_needed: parseInt(seats),
         status: "pending",
         auto_match: true, // Enable automatic matching
         max_walking_distance: 1.0, // Default walking distance in km
@@ -161,52 +226,158 @@ const RideSearchPanel = ({
 
       if (matchError) {
         console.error("Error in automatic matching:", matchError);
+      } else if (matchResult) {
+        toast({
+          title: "Driver Found!",
+          description:
+            "A driver has been matched with your ride. Check the Rides tab for details.",
+        });
       } else {
-        console.log("Automatic matching result:", matchResult);
+        toast({
+          title: "Ride Request Submitted",
+          description:
+            "We're looking for drivers in your direction. You'll be notified when we find a match.",
+        });
       }
 
-      setSearchState("pending");
-      setBookingConfirmed(true);
+      // Set confirmation and reset state
+      setSearchState("completed");
+      setExistingRequest(data);
 
-      // Show notification that the system is searching for a match
-      alert(
-        "Your ride request has been submitted! Our system is automatically matching you with available drivers. You'll be notified when a match is found.",
-      );
+      // Reset form fields
+      setPickup("");
+      setDropoff("");
 
-      // Subscribe to status changes on the ride request
-      const channel = supabase
-        .channel(`request_${data.id}`)
-        .on(
-          "postgres_changes",
-          {
-            event: "UPDATE",
-            schema: "public",
-            table: "ride_requests",
-            filter: `id=eq.${data.id}`,
-          },
-          (payload) => {
-            console.log("Ride request status updated:", payload.new.status);
-            setSearchState(payload.new.status);
-
-            // Notify user when a driver is found
-            if (payload.new.status === "accepted") {
-              alert(
-                "Good news! A driver has been found for your ride. Check the Rides tab for details.",
-              );
-            }
-          },
-        )
-        .subscribe();
-
-      return () => {
-        supabase.removeChannel(channel);
-      };
-    } catch (error) {
+      // Notify parent
+      if (onRequestCreated) onRequestCreated();
+    } catch (error: any) {
       console.error("Error creating ride request:", error);
-      alert("Failed to create ride request");
+
+      // Handle duplicate request error specifically
+      if (error?.code === "23505" || error?.message?.includes("duplicate")) {
+        toast({
+          title: "You already have an active ride request",
+          description:
+            "Please cancel your existing ride request before creating a new one.",
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Error",
+          description: error.message || "Failed to create ride request",
+          variant: "destructive",
+        });
+      }
+
       setSearchState("initial");
     }
   };
+
+  const handleCancelRequest = async () => {
+    if (!existingRequest) return;
+
+    try {
+      const { error } = await supabase
+        .from("ride_requests")
+        .delete()
+        .eq("id", existingRequest.id);
+
+      if (error) throw error;
+
+      setExistingRequest(null);
+      toast({
+        title: "Ride Request Cancelled",
+        description: "Your ride request has been cancelled successfully.",
+      });
+
+      // Notify parent
+      if (onRequestCreated) onRequestCreated();
+    } catch (error) {
+      console.error("Error cancelling ride request:", error);
+      toast({
+        title: "Error",
+        description: "Failed to cancel your ride request. Please try again.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // If there's an existing request, show different UI
+  if (existingRequest) {
+    return (
+      <Card className="w-[400px] p-4 bg-white">
+        <div className="space-y-4">
+          <div className="text-center">
+            <h3 className="font-medium mb-1">Active Ride Request</h3>
+            <p className="text-sm text-muted-foreground">
+              You already have an active ride request.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            {existingRequest.status === "pending" ? (
+              <div className="bg-yellow-50 border border-yellow-200 p-3 rounded-md">
+                <p className="text-sm text-yellow-800 font-medium">
+                  Searching for drivers
+                </p>
+                <p className="text-xs text-yellow-700 mt-1">
+                  We're looking for a driver going in your direction. You'll be
+                  notified when we find a match.
+                </p>
+              </div>
+            ) : (
+              <div className="bg-green-50 border border-green-200 p-3 rounded-md">
+                <p className="text-sm text-green-800 font-medium">
+                  Driver Found!
+                </p>
+                <p className="text-xs text-green-700 mt-1">
+                  A driver has been matched with your ride. Check your rides for
+                  details.
+                </p>
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-1.5">
+            <div className="text-sm">
+              <span className="font-medium">Pickup:</span>{" "}
+              <span className="text-muted-foreground">
+                {existingRequest.pickup_latitude.toFixed(6)},{" "}
+                {existingRequest.pickup_longitude.toFixed(6)}
+              </span>
+            </div>
+            <div className="text-sm">
+              <span className="font-medium">Dropoff:</span>{" "}
+              <span className="text-muted-foreground">
+                {existingRequest.destination_latitude.toFixed(6)},{" "}
+                {existingRequest.destination_longitude.toFixed(6)}
+              </span>
+            </div>
+            <div className="text-sm">
+              <span className="font-medium">Scheduled:</span>{" "}
+              <span className="text-muted-foreground">
+                {new Date(existingRequest.scheduled_time).toLocaleString()}
+              </span>
+            </div>
+            <div className="text-sm">
+              <span className="font-medium">Seats:</span>{" "}
+              <span className="text-muted-foreground">
+                {existingRequest.seats_needed || 1}
+              </span>
+            </div>
+          </div>
+
+          <Button
+            variant="destructive"
+            className="w-full"
+            onClick={handleCancelRequest}
+          >
+            Cancel Ride Request
+          </Button>
+        </div>
+      </Card>
+    );
+  }
 
   return (
     <Card className="w-[400px] p-4 bg-white">
@@ -221,6 +392,7 @@ const RideSearchPanel = ({
               value={pickup}
               onChange={(e) => setPickup(e.target.value)}
               className="w-full"
+              disabled={searchState === "searching"}
             />
           </div>
           <div className="space-y-2">
@@ -232,6 +404,7 @@ const RideSearchPanel = ({
               value={dropoff}
               onChange={(e) => setDropoff(e.target.value)}
               className="w-full"
+              disabled={searchState === "searching"}
             />
           </div>
         </div>
@@ -242,6 +415,7 @@ const RideSearchPanel = ({
             value={timeType}
             onValueChange={(value: "now" | "schedule") => setTimeType(value)}
             className="flex space-x-4"
+            disabled={searchState === "searching"}
           >
             <div className="flex items-center space-x-2">
               <RadioGroupItem value="now" id="now" />
@@ -261,6 +435,7 @@ const RideSearchPanel = ({
                 <Button
                   variant="outline"
                   className="w-full justify-start text-left font-normal"
+                  disabled={searchState === "searching"}
                 >
                   <CalendarIcon className="mr-2 h-4 w-4" />
                   {date ? format(date, "PPP") : <span>Pick a date</span>}
@@ -274,8 +449,8 @@ const RideSearchPanel = ({
                     if (date) {
                       // Preserve the current time when changing date
                       const newDate = new Date(date);
-                      newDate.setHours(date.getHours());
-                      newDate.setMinutes(date.getMinutes());
+                      newDate.setHours(new Date().getHours());
+                      newDate.setMinutes(new Date().getMinutes());
                       setDate(newDate);
                     }
                   }}
@@ -291,6 +466,7 @@ const RideSearchPanel = ({
                   newDate.setHours(parseInt(value));
                   setDate(newDate);
                 }}
+                disabled={searchState === "searching"}
               >
                 <SelectTrigger className="w-full">
                   <SelectValue placeholder="Hour" />
@@ -310,6 +486,7 @@ const RideSearchPanel = ({
                   newDate.setMinutes(parseInt(value));
                   setDate(newDate);
                 }}
+                disabled={searchState === "searching"}
               >
                 <SelectTrigger className="w-full">
                   <SelectValue placeholder="Minute" />
@@ -329,6 +506,26 @@ const RideSearchPanel = ({
           </div>
         )}
 
+        <div className="space-y-2">
+          <Label>Seats needed</Label>
+          <Select
+            value={seats}
+            onValueChange={setSeats}
+            disabled={searchState === "searching"}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="Select seats needed" />
+            </SelectTrigger>
+            <SelectContent>
+              {[1, 2, 3, 4].map((num) => (
+                <SelectItem key={num} value={num.toString()}>
+                  {num} seat{num > 1 ? "s" : ""}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
         <Button
           className="w-full"
           onClick={handleSearch}
@@ -336,25 +533,22 @@ const RideSearchPanel = ({
             !pickupCoords || !dropoffCoords || searchState === "searching"
           }
         >
-          <Search className="mr-2 h-4 w-4" />
-          {searchState === "searching" ? "Searching..." : "Request Ride"}
+          {searchState === "searching" ? (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              Searching...
+            </>
+          ) : (
+            <>
+              <Search className="mr-2 h-4 w-4" />
+              Request Ride
+            </>
+          )}
         </Button>
         <p className="text-xs text-muted-foreground text-center mt-2">
           Your ride request will be automatically matched with available drivers
           going in the same direction.
         </p>
-
-        {bookingConfirmed && (
-          <div className="mt-4 p-3 bg-green-50 rounded-md border border-green-200">
-            <p className="text-sm font-medium text-green-800">
-              Ride request submitted!
-            </p>
-            <p className="text-xs text-green-700 mt-1">
-              Waiting for automatic matching. You'll be notified when a driver
-              is found.
-            </p>
-          </div>
-        )}
       </div>
     </Card>
   );

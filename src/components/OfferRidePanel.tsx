@@ -12,7 +12,7 @@ import {
   SelectValue,
 } from "./ui/select";
 import { format } from "date-fns";
-import { CalendarIcon, Car } from "lucide-react";
+import { CalendarIcon, Car, Loader2 } from "lucide-react";
 import { useAuth } from "@/lib/AuthContext";
 import { supabase } from "@/lib/supabase";
 import { RadioGroup, RadioGroupItem } from "./ui/radio-group";
@@ -24,10 +24,12 @@ interface OfferRidePanelProps {
     type: "pickup" | "dropoff",
     coords: { lat: number; lng: number },
   ) => void;
+  onRideCreated?: () => void;
 }
 
 const OfferRidePanel = ({
   onLocationSelect = () => {},
+  onRideCreated = () => {},
 }: OfferRidePanelProps) => {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -45,19 +47,99 @@ const OfferRidePanel = ({
     lng: number;
   } | null>(null);
   const [loading, setLoading] = React.useState(false);
+  const [activeRide, setActiveRide] = React.useState<any>(null);
 
   const pickupRef = React.useRef<HTMLInputElement>(null);
   const dropoffRef = React.useRef<HTMLInputElement>(null);
+
+  // Check for existing active rides
+  React.useEffect(() => {
+    if (!user) return;
+
+    const checkActiveRides = async () => {
+      try {
+        const { data, error } = await supabase
+          .from("rides")
+          .select("*")
+          .eq("driver_id", user.id)
+          .in("status", ["pending", "accepted", "in_progress"])
+          .maybeSingle();
+
+        if (error) throw error;
+
+        if (data) {
+          setActiveRide(data);
+
+          // Set pickup/dropoff for display
+          if (data.pickup_latitude && data.pickup_longitude) {
+            setPickupCoords({
+              lat: data.pickup_latitude,
+              lng: data.pickup_longitude,
+            });
+            onLocationSelect("pickup", {
+              lat: data.pickup_latitude,
+              lng: data.pickup_longitude,
+            });
+          }
+
+          if (data.destination_latitude && data.destination_longitude) {
+            setDropoffCoords({
+              lat: data.destination_latitude,
+              lng: data.destination_longitude,
+            });
+            onLocationSelect("dropoff", {
+              lat: data.destination_latitude,
+              lng: data.destination_longitude,
+            });
+          }
+        }
+      } catch (error) {
+        console.error("Error checking active rides:", error);
+      }
+    };
+
+    checkActiveRides();
+
+    // Subscribe to ride changes
+    const channel = supabase
+      .channel(`driver_rides_${user.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "rides",
+          filter: `driver_id=eq.${user.id}`,
+        },
+        (payload) => {
+          if (
+            payload.eventType === "DELETE" &&
+            activeRide?.id === payload.old.id
+          ) {
+            setActiveRide(null);
+          } else {
+            checkActiveRides();
+          }
+        },
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user, onLocationSelect, activeRide?.id]);
 
   React.useEffect(() => {
     if (!window.google?.maps?.places) return;
 
     const setupAutocomplete = (
-      input: HTMLInputElement,
+      input: HTMLInputElement | null,
       setLocation: (val: string) => void,
       setCoords: (coords: { lat: number; lng: number } | null) => void,
       type: "pickup" | "dropoff",
     ) => {
+      if (!input) return;
+
       const autocomplete = new window.google.maps.places.Autocomplete(input, {
         fields: ["formatted_address", "geometry"],
         types: ["geocode", "establishment"],
@@ -78,27 +160,24 @@ const OfferRidePanel = ({
       });
     };
 
-    if (pickupRef.current) {
-      setupAutocomplete(
-        pickupRef.current,
-        setPickup,
-        setPickupCoords,
-        "pickup",
-      );
-    }
-
-    if (dropoffRef.current) {
-      setupAutocomplete(
-        dropoffRef.current,
-        setDropoff,
-        setDropoffCoords,
-        "dropoff",
-      );
-    }
+    setupAutocomplete(pickupRef.current, setPickup, setPickupCoords, "pickup");
+    setupAutocomplete(
+      dropoffRef.current,
+      setDropoff,
+      setDropoffCoords,
+      "dropoff",
+    );
   }, [onLocationSelect]);
 
   const handleOfferRide = async () => {
-    if (!pickupCoords || !dropoffCoords || !user) return;
+    if (!pickupCoords || !dropoffCoords || !user) {
+      toast({
+        title: "Missing Information",
+        description: "Please enter both pickup and dropoff locations",
+        variant: "destructive",
+      });
+      return;
+    }
 
     setLoading(true);
 
@@ -115,7 +194,8 @@ const OfferRidePanel = ({
         const { error: createError } = await supabase.from("users").insert({
           id: user.id,
           email: user.email,
-          full_name: user.user_metadata?.full_name,
+          full_name: user.user_metadata?.full_name || "New Driver",
+          user_type: "driver",
         });
 
         if (createError) throw createError;
@@ -189,7 +269,7 @@ const OfferRidePanel = ({
         last_location_update: new Date().toISOString(),
       };
 
-      console.log("Creating ride:", rideData);
+      // Create the ride
       const { data, error } = await supabase
         .from("rides")
         .insert(rideData)
@@ -197,12 +277,13 @@ const OfferRidePanel = ({
         .single();
 
       if (error) {
-        console.error("Error creating ride:", error);
         throw error;
       }
-      console.log("Created ride:", data);
 
-      // After creating the ride, check for matching passengers
+      // Set the active ride
+      setActiveRide(data);
+
+      // After creating the ride, try to find matching passengers
       if (data) {
         // Trigger the backend function to find matching passengers
         const { data: matchResult, error: matchError } = await supabase.rpc(
@@ -230,12 +311,8 @@ const OfferRidePanel = ({
         }
       }
 
-      // Reset form
-      setPickup("");
-      setDropoff("");
-      setPickupCoords(null);
-      setDropoffCoords(null);
-      setSeats("4");
+      // Notify parent component
+      if (onRideCreated) onRideCreated();
     } catch (error: any) {
       console.error("Error offering ride:", error);
       toast({
@@ -247,6 +324,127 @@ const OfferRidePanel = ({
       setLoading(false);
     }
   };
+
+  const handleCancelRide = async () => {
+    if (!activeRide) return;
+
+    try {
+      setLoading(true);
+
+      // Call backend function to cancel ride
+      const { data, error } = await supabase.rpc("cancel_ride", {
+        p_ride_id: activeRide.id,
+        p_reason: "Cancelled by driver",
+      });
+
+      if (error) throw error;
+
+      // Reset state
+      setActiveRide(null);
+      setPickup("");
+      setDropoff("");
+      setPickupCoords(null);
+      setDropoffCoords(null);
+
+      toast({
+        title: "Ride Cancelled",
+        description: "Your ride offer has been cancelled successfully.",
+      });
+
+      // Notify parent
+      if (onRideCreated) onRideCreated();
+    } catch (error) {
+      console.error("Error cancelling ride:", error);
+      toast({
+        title: "Error",
+        description: "Failed to cancel your ride. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // If there's an active ride, show different UI
+  if (activeRide) {
+    return (
+      <Card className="w-[400px] p-4 bg-white">
+        <div className="space-y-4">
+          <div className="text-center">
+            <h3 className="font-medium mb-1">Active Ride Offer</h3>
+            <p className="text-sm text-muted-foreground">
+              You have an active ride offer.
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <div className="text-sm">
+              <span className="font-medium">Status:</span>{" "}
+              <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                {activeRide.status.charAt(0).toUpperCase() +
+                  activeRide.status.slice(1)}
+              </span>
+            </div>
+            <div className="text-sm">
+              <span className="font-medium">Pickup:</span>{" "}
+              <span className="text-muted-foreground">
+                {activeRide.pickup_latitude.toFixed(6)},{" "}
+                {activeRide.pickup_longitude.toFixed(6)}
+              </span>
+            </div>
+            <div className="text-sm">
+              <span className="font-medium">Dropoff:</span>{" "}
+              <span className="text-muted-foreground">
+                {activeRide.destination_latitude.toFixed(6)},{" "}
+                {activeRide.destination_longitude.toFixed(6)}
+              </span>
+            </div>
+            <div className="text-sm">
+              <span className="font-medium">Scheduled:</span>{" "}
+              <span className="text-muted-foreground">
+                {new Date(activeRide.scheduled_time).toLocaleString()}
+              </span>
+            </div>
+            <div className="text-sm">
+              <span className="font-medium">Seats Available:</span>{" "}
+              <span className="text-muted-foreground">
+                {activeRide.seats_available}
+              </span>
+            </div>
+          </div>
+
+          {activeRide.status === "pending" && (
+            <Button
+              variant="destructive"
+              className="w-full"
+              onClick={handleCancelRide}
+              disabled={loading}
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Cancelling...
+                </>
+              ) : (
+                "Cancel Ride Offer"
+              )}
+            </Button>
+          )}
+
+          {activeRide.status !== "pending" && (
+            <div className="bg-green-50 border border-green-200 p-3 rounded-md">
+              <p className="text-sm text-green-800 font-medium">
+                Your ride is {activeRide.status}
+              </p>
+              <p className="text-xs text-green-700 mt-1">
+                Check the "Passengers" tab to see your matched riders.
+              </p>
+            </div>
+          )}
+        </div>
+      </Card>
+    );
+  }
 
   return (
     <Card className="w-[400px] p-4 bg-white">
@@ -260,6 +458,7 @@ const OfferRidePanel = ({
             value={pickup}
             onChange={(e) => setPickup(e.target.value)}
             className="w-full"
+            disabled={loading}
           />
         </div>
 
@@ -272,6 +471,7 @@ const OfferRidePanel = ({
             value={dropoff}
             onChange={(e) => setDropoff(e.target.value)}
             className="w-full"
+            disabled={loading}
           />
         </div>
 
@@ -281,6 +481,7 @@ const OfferRidePanel = ({
             value={timeType}
             onValueChange={(value: "now" | "schedule") => setTimeType(value)}
             className="flex space-x-4"
+            disabled={loading}
           >
             <div className="flex items-center space-x-2">
               <RadioGroupItem value="now" id="now" />
@@ -300,6 +501,7 @@ const OfferRidePanel = ({
                 <Button
                   variant="outline"
                   className="w-full justify-start text-left font-normal"
+                  disabled={loading}
                 >
                   <CalendarIcon className="mr-2 h-4 w-4" />
                   {date ? format(date, "PPP") : <span>Pick a date</span>}
@@ -330,6 +532,7 @@ const OfferRidePanel = ({
                   newDate.setHours(parseInt(value));
                   setDate(newDate);
                 }}
+                disabled={loading}
               >
                 <SelectTrigger className="w-full">
                   <SelectValue placeholder="Hour" />
@@ -349,6 +552,7 @@ const OfferRidePanel = ({
                   newDate.setMinutes(parseInt(value));
                   setDate(newDate);
                 }}
+                disabled={loading}
               >
                 <SelectTrigger className="w-full">
                   <SelectValue placeholder="Minute" />
@@ -370,7 +574,7 @@ const OfferRidePanel = ({
 
         <div className="space-y-2">
           <Label>Available seats</Label>
-          <Select value={seats} onValueChange={setSeats}>
+          <Select value={seats} onValueChange={setSeats} disabled={loading}>
             <SelectTrigger>
               <SelectValue placeholder="Select available seats" />
             </SelectTrigger>
@@ -389,8 +593,17 @@ const OfferRidePanel = ({
           onClick={handleOfferRide}
           disabled={!pickupCoords || !dropoffCoords || loading}
         >
-          <Car className="mr-2 h-4 w-4" />
-          {loading ? "Creating Ride..." : "Offer Ride"}
+          {loading ? (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              Creating Ride...
+            </>
+          ) : (
+            <>
+              <Car className="mr-2 h-4 w-4" />
+              Offer Ride
+            </>
+          )}
         </Button>
         <p className="text-xs text-muted-foreground text-center mt-2">
           Your ride will be automatically matched with passengers going in the
