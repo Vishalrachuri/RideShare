@@ -301,6 +301,38 @@ const OfferRidePanel = ({
               variant: "default",
             });
           } else {
+            // If find_passengers_for_ride didn't find matches, try periodic_match_check
+            console.log("No matches found, trying periodic match check");
+            const { data: periodicResult, error: periodicError } =
+              await supabase.rpc("periodic_match_check");
+
+            if (periodicError) {
+              console.error("Error in periodic match check:", periodicError);
+            } else {
+              console.log("Periodic match check result:", periodicResult);
+
+              // Check if any passengers were matched to this ride
+              const { data: matchedRequests, error: requestsError } =
+                await supabase
+                  .from("ride_requests")
+                  .select("id")
+                  .eq("ride_id", data.id)
+                  .eq("status", "accepted");
+
+              if (
+                !requestsError &&
+                matchedRequests &&
+                matchedRequests.length > 0
+              ) {
+                toast({
+                  title: "Ride Offered Successfully!",
+                  description: `Found ${matchedRequests.length} matching passenger(s) for your ride!`,
+                  variant: "default",
+                });
+                return;
+              }
+            }
+
             toast({
               title: "Ride Offered Successfully!",
               description:

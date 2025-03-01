@@ -13,9 +13,16 @@ import { ScrollArea } from "./ui/scroll-area";
 interface DriverPanelProps {
   className?: string;
   onRideStart?: () => void;
+  findMatches?: () => void;
+  isMatching?: boolean;
 }
 
-const DriverPanel = ({ className = "", onRideStart }: DriverPanelProps) => {
+const DriverPanel = ({
+  className = "",
+  onRideStart,
+  findMatches,
+  isMatching = false,
+}: DriverPanelProps) => {
   const { user } = useAuth();
   const { toast } = useToast();
   const [activeRide, setActiveRide] = React.useState<any>(null);
@@ -64,6 +71,7 @@ const DriverPanel = ({ className = "", onRideStart }: DriverPanelProps) => {
   // Load matched requests for a ride
   const loadMatchedRequests = async (rideId: string) => {
     try {
+      console.log(`Loading matched requests for ride ${rideId}`);
       // Get all accepted ride requests for this ride
       const { data, error } = await supabase
         .from("ride_requests")
@@ -74,8 +82,19 @@ const DriverPanel = ({ className = "", onRideStart }: DriverPanelProps) => {
         `,
         )
         .eq("ride_id", rideId)
-        .in("status", ["accepted", "in_progress", "picked_up"])
+        .in("status", [
+          "accepted",
+          "driver_accepted",
+          "in_progress",
+          "pickup_pending",
+          "picked_up",
+        ])
         .order("created_at", { ascending: false });
+
+      console.log(
+        `Found ${data?.length || 0} matched requests for ride ${rideId}:`,
+        data,
+      );
 
       if (error) {
         throw error;
@@ -141,33 +160,38 @@ const DriverPanel = ({ className = "", onRideStart }: DriverPanelProps) => {
   }, [user, loadActiveRideData, activeRide?.id, toast]);
 
   // Try to find matches for the current ride
-  const findMatches = async () => {
+  const handleFindMatches = async () => {
     if (!activeRide) return;
 
     try {
       setFindingMatches(true);
 
-      // Call the function to find passengers for this ride
-      const { data, error } = await supabase.rpc("find_passengers_for_ride", {
-        p_ride_id: activeRide.id,
-      });
-
-      if (error) throw error;
-
-      // Refresh the matched requests
-      await loadMatchedRequests(activeRide.id);
-
-      if (data === 0) {
-        toast({
-          title: "No New Matches",
-          description:
-            "No new matches found at this time. We'll keep searching.",
-        });
+      if (findMatches) {
+        // Use the provided findMatches function if available
+        findMatches();
       } else {
-        toast({
-          title: "Success!",
-          description: `Found ${data} new passenger match${data > 1 ? "es" : ""}!`,
+        // Call the function to find passengers for this ride
+        const { data, error } = await supabase.rpc("find_passengers_for_ride", {
+          p_ride_id: activeRide.id,
         });
+
+        if (error) throw error;
+
+        // Refresh the matched requests
+        await loadMatchedRequests(activeRide.id);
+
+        if (data === 0) {
+          toast({
+            title: "No New Matches",
+            description:
+              "No new matches found at this time. We'll keep searching.",
+          });
+        } else {
+          toast({
+            title: "Success!",
+            description: `Found ${data} new passenger match${data > 1 ? "es" : ""}!`,
+          });
+        }
       }
     } catch (error) {
       console.error("Error finding matches:", error);
@@ -305,10 +329,12 @@ const DriverPanel = ({ className = "", onRideStart }: DriverPanelProps) => {
         <div className="flex gap-2">
           <Button
             className="flex-1"
-            onClick={findMatches}
-            disabled={findingMatches || activeRide.status !== "pending"}
+            onClick={handleFindMatches}
+            disabled={
+              isMatching || findingMatches || activeRide.status !== "pending"
+            }
           >
-            {findingMatches ? (
+            {isMatching || findingMatches ? (
               <>
                 <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
                 Finding...

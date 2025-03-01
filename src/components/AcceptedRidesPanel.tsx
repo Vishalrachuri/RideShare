@@ -58,6 +58,7 @@ const AcceptedRidesPanel = ({ className = "" }: AcceptedRidesPanelProps) => {
         }
 
         // Get all ride requests with status=accepted for these rides
+        console.log("Looking for accepted requests for ride IDs:", rideIds);
         const { data: requests, error: requestsError } = await supabase
           .from("ride_requests")
           .select(
@@ -71,6 +72,7 @@ const AcceptedRidesPanel = ({ className = "" }: AcceptedRidesPanelProps) => {
           .in("status", [
             "accepted",
             "driver_accepted",
+            "in_progress",
             "pickup_pending",
             "picked_up",
           ]);

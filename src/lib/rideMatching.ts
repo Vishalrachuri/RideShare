@@ -257,18 +257,41 @@ export const findMatchingRides = async (requestId: string) => {
     throw new Error("Failed to fetch potential rides");
   }
 
+  // Log the rides and request for debugging
+  console.log("Request details:", {
+    id: request.id,
+    pickup: [request.pickup_latitude, request.pickup_longitude],
+    dropoff: [request.destination_latitude, request.destination_longitude],
+    time: request.scheduled_time,
+    seats: request.seats_needed,
+  });
+
+  console.log(
+    "Available rides:",
+    rides?.map((ride) => ({
+      id: ride.id,
+      driver: ride.driver_id,
+      pickup: [ride.pickup_latitude, ride.pickup_longitude],
+      dropoff: [ride.destination_latitude, ride.destination_longitude],
+      time: ride.scheduled_time,
+      seats: ride.seats_available,
+    })),
+  );
+
   // Filter rides based on route matching and calculate scores
   const matchingRides =
     rides
-      ?.map((ride) => ({
-        ride,
-        score: calculateMatchScore(ride, request),
-      }))
-      .filter((item) => item.score >= 0.65) // Only include rides with a score above threshold
+      ?.map((ride) => {
+        const score = calculateMatchScore(ride, request);
+        console.log(`Match score for ride ${ride.id}: ${score}`);
+        return { ride, score };
+      })
+      .filter((item) => item.score >= 0.5) // Lower threshold to 0.5 to increase matches
       .sort((a, b) => b.score - a.score) || []; // Sort by score descending
 
   console.log(
     `Found ${matchingRides.length} matching rides for request ${requestId}`,
+    matchingRides.map((m) => ({ id: m.ride.id, score: m.score })),
   );
   return matchingRides;
 };

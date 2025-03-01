@@ -27,6 +27,7 @@ const DashboardRouter = () => {
         // First try to get user type from metadata
         if (user.user_metadata?.user_type) {
           setUserType(user.user_metadata.user_type);
+          console.log("User type from metadata:", user.user_metadata.user_type);
         }
 
         // Then check if user exists in users table
@@ -39,14 +40,15 @@ const DashboardRouter = () => {
         if (userError) {
           if (userError.code === "PGRST116") {
             // User doesn't exist in users table, create them
-            const defaultType = "passenger";
-            console.log("Creating new user with type:", defaultType);
+            // Use the user_type from metadata if available, otherwise default to passenger
+            const userType = user.user_metadata?.user_type || "passenger";
+            console.log("Creating new user with type:", userType);
 
             const { error: createError } = await supabase.from("users").insert({
               id: user.id,
               email: user.email,
               full_name: user.user_metadata?.full_name || "New User",
-              user_type: user.user_metadata?.user_type || defaultType,
+              user_type: userType,
             });
 
             if (createError) {
@@ -54,7 +56,7 @@ const DashboardRouter = () => {
               throw createError;
             }
 
-            setUserType(user.user_metadata?.user_type || defaultType);
+            setUserType(userType);
             toast({
               title: "Welcome to Carpooling!",
               description: "Your account has been created successfully.",
@@ -65,8 +67,9 @@ const DashboardRouter = () => {
             throw userError;
           }
         } else if (userData) {
+          console.log("User data from database:", userData);
           setUserData(userData);
-          setUserType(userData.user_type || "passenger");
+          setUserType(userData.user_type);
         }
       } catch (error) {
         console.error("Error in fetchUserType:", error);

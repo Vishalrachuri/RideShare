@@ -10,6 +10,12 @@ let matchingInterval: number | null = null;
 export const startRideMatchingWorker = () => {
   console.log("Starting ride matching worker...");
 
+  // Start the periodic matching timer
+  startPeriodicMatchingTimer(2); // Check every 2 minutes
+
+  // Start the expiration timer
+  startExpirationTimer(15); // Check every 15 minutes
+
   const channel = supabase
     .channel("ride_matching")
     .on(
@@ -28,35 +34,69 @@ export const startRideMatchingWorker = () => {
             console.log("New ride request received:", payload.new);
             const request = payload.new;
 
-            // Get active rides that could match
+            // Get active rides that could match - with more relaxed time constraints
             const { data: activeRides, error: ridesError } = await supabase
               .from("rides")
               .select("*")
               .eq("status", "pending")
-              .gt("seats_available", request.seats_needed || 1)
+              .gte("seats_available", request.seats_needed || 1)
               .gte(
                 "scheduled_time",
-                new Date(new Date().getTime() - 30 * 60000).toISOString(),
+                new Date(new Date().getTime() - 60 * 60000).toISOString(), // 60 minutes before
               )
               .lte(
                 "scheduled_time",
-                new Date(new Date().getTime() + 30 * 60000).toISOString(),
+                new Date(new Date().getTime() + 60 * 60000).toISOString(), // 60 minutes after
               );
 
             if (ridesError) throw ridesError;
-            if (!activeRides?.length) return;
+
+            if (!activeRides?.length) {
+              console.log("No active rides found for matching");
+              return;
+            }
+
+            console.log(
+              `Found ${activeRides.length} potential rides for matching`,
+            );
 
             // Check each ride for a match
             for (const ride of activeRides) {
-              // Check if ride matches request criteria
+              console.log(
+                `Checking ride ${ride.id} for match with request ${request.id}`,
+              );
+              console.log("Ride details:", {
+                pickup: [ride.pickup_latitude, ride.pickup_longitude],
+                dropoff: [
+                  ride.destination_latitude,
+                  ride.destination_longitude,
+                ],
+                time: ride.scheduled_time,
+              });
+              console.log("Request details:", {
+                pickup: [request.pickup_latitude, request.pickup_longitude],
+                dropoff: [
+                  request.destination_latitude,
+                  request.destination_longitude,
+                ],
+                time: request.scheduled_time,
+              });
+
+              // Check if ride matches request criteria with more relaxed parameters
               const { data: isMatch } = await supabase.rpc("check_ride_match", {
                 p_ride_id: ride.id,
                 p_request_id: request.id,
-                max_detour_km: 5.0,
-                max_time_diff_minutes: 30,
+                max_detour_km: 10.0, // Increased from 5.0
+                max_time_diff_minutes: 60, // Increased from 30
               });
 
+              console.log(`Match result for ride ${ride.id}:`, isMatch);
+
               if (isMatch) {
+                console.log(
+                  `Found match between ride ${ride.id} and request ${request.id}`,
+                );
+
                 // Create notification for driver
                 await supabase.from("notifications").insert({
                   user_id: ride.driver_id,
@@ -66,14 +106,18 @@ export const startRideMatchingWorker = () => {
                 });
 
                 // Try to automatically match
-                const { data: matchResult } = await supabase.rpc(
-                  "auto_match_passenger_with_driver",
-                  { p_request_id: request.id },
-                );
+                const { data: matchResult, error: matchError } =
+                  await supabase.rpc("auto_match_passenger_with_driver", {
+                    p_request_id: request.id,
+                  });
+
+                if (matchError) {
+                  console.error("Error in auto matching:", matchError);
+                }
 
                 if (matchResult) {
                   console.log(
-                    `Automatically matched request ${request.id} with a ride`,
+                    `Automatically matched request ${request.id} with ride ${ride.id}`,
                   );
 
                   // Create notification for passenger
@@ -84,9 +128,63 @@ export const startRideMatchingWorker = () => {
                       "You've been matched with a driver going your way!",
                     type: "ride_matched",
                   });
-                }
 
-                break; // Stop after first match
+                  // Dispatch custom event for UI updates
+                  const matchEvent = new CustomEvent("ride-matched", {
+                    detail: { requestId: request.id, rideId: ride.id },
+                  });
+                  window.dispatchEvent(matchEvent);
+
+                  break; // Stop after first match
+                } else {
+                  console.log(
+                    `Auto-matching failed for request ${request.id} with ride ${ride.id}`,
+                  );
+                  // Try manual matching as fallback
+                  try {
+                    const { data: manualMatchResult, error: manualMatchError } =
+                      await supabase.rpc("manual_match_ride_request", {
+                        p_request_id: request.id,
+                        p_ride_id: ride.id,
+                      });
+
+                    if (manualMatchError) throw manualMatchError;
+
+                    if (manualMatchResult) {
+                      console.log(
+                        `Manually matched request ${request.id} with ride ${ride.id}`,
+                      );
+
+                      // Create notifications
+                      await supabase.from("notifications").insert([
+                        {
+                          user_id: request.rider_id,
+                          title: "Ride Matched",
+                          message:
+                            "You've been matched with a driver going your way!",
+                          type: "ride_matched",
+                        },
+                        {
+                          user_id: ride.driver_id,
+                          title: "New Passenger Matched",
+                          message:
+                            "A passenger has been matched with your ride.",
+                          type: "ride_matched",
+                        },
+                      ]);
+
+                      // Dispatch custom event for UI updates
+                      const matchEvent = new CustomEvent("ride-matched", {
+                        detail: { requestId: request.id, rideId: ride.id },
+                      });
+                      window.dispatchEvent(matchEvent);
+
+                      break; // Stop after successful match
+                    }
+                  } catch (manualError) {
+                    console.error("Error in manual matching:", manualError);
+                  }
+                }
               }
             }
           }

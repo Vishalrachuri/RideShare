@@ -188,16 +188,120 @@ export const cancelRide = async (
  */
 export const findPassengersForRide = async (rideId: string) => {
   try {
-    const { data, error } = await supabase.rpc("find_passengers_for_ride", {
-      p_ride_id: rideId,
-    });
+    console.log(`Finding passengers for ride ${rideId}`);
 
-    if (error) {
-      console.error("Error finding passengers:", error);
-      return { success: false, error, matchCount: 0 };
+    // First get the ride details
+    const { data: ride, error: rideError } = await supabase
+      .from("rides")
+      .select("*")
+      .eq("id", rideId)
+      .single();
+
+    if (rideError) {
+      console.error("Error fetching ride details:", rideError);
+      return { success: false, error: rideError, matchCount: 0 };
     }
 
-    return { success: true, matchCount: data || 0 };
+    console.log("Ride details:", {
+      pickup: [ride.pickup_latitude, ride.pickup_longitude],
+      dropoff: [ride.destination_latitude, ride.destination_longitude],
+      time: ride.scheduled_time,
+      seats: ride.seats_available,
+    });
+
+    // Get pending ride requests that could match
+    const { data: requests, error: requestsError } = await supabase
+      .from("ride_requests")
+      .select("*")
+      .eq("status", "pending")
+      .lte("seats_needed", ride.seats_available);
+
+    if (requestsError) {
+      console.error("Error fetching ride requests:", requestsError);
+      return { success: false, error: requestsError, matchCount: 0 };
+    }
+
+    console.log(`Found ${requests?.length || 0} potential requests to match`);
+
+    // Try to match each request
+    let matchCount = 0;
+
+    if (requests && requests.length > 0) {
+      for (const request of requests) {
+        console.log(
+          `Checking request ${request.id} for match with ride ${rideId}`,
+        );
+        console.log("Request details:", {
+          pickup: [request.pickup_latitude, request.pickup_longitude],
+          dropoff: [
+            request.destination_latitude,
+            request.destination_longitude,
+          ],
+          time: request.scheduled_time,
+          seats: request.seats_needed,
+        });
+
+        // Try to match with more relaxed parameters
+        const { data: isMatch } = await supabase.rpc("check_ride_match", {
+          p_ride_id: rideId,
+          p_request_id: request.id,
+          max_detour_km: 10.0, // Increased from 5.0
+          max_time_diff_minutes: 60, // Increased from 30
+        });
+
+        console.log(`Match result for request ${request.id}:`, isMatch);
+
+        if (isMatch) {
+          // Try to match this request with the ride
+          const { data: matchResult, error: matchError } = await supabase.rpc(
+            "manual_match_ride_request",
+            {
+              p_request_id: request.id,
+              p_ride_id: rideId,
+            },
+          );
+
+          if (matchError) {
+            console.error(`Error matching request ${request.id}:`, matchError);
+            continue;
+          }
+
+          if (matchResult) {
+            console.log(
+              `Successfully matched request ${request.id} with ride ${rideId}`,
+            );
+            matchCount++;
+
+            // Create notifications
+            await supabase.from("notifications").insert([
+              {
+                user_id: request.rider_id,
+                title: "Ride Matched",
+                message: "You've been matched with a driver going your way!",
+                type: "ride_matched",
+              },
+              {
+                user_id: ride.driver_id,
+                title: "New Passenger Matched",
+                message: "A passenger has been matched with your ride.",
+                type: "ride_matched",
+              },
+            ]);
+
+            // Dispatch custom event for UI updates
+            const matchEvent = new CustomEvent("ride-matched", {
+              detail: { requestId: request.id, rideId },
+            });
+            window.dispatchEvent(matchEvent);
+          }
+        }
+      }
+    }
+
+    console.log(
+      `Found and matched ${matchCount} passengers for ride ${rideId}`,
+    );
+    return { success: true, matchCount };
   } catch (error) {
     console.error("Exception in findPassengersForRide:", error);
     return { success: false, error, matchCount: 0 };
@@ -209,6 +313,10 @@ export const findPassengersForRide = async (rideId: string) => {
  */
 export const autoMatchPassenger = async (requestId: string) => {
   try {
+    console.log(
+      `Attempting to auto-match passenger for request ID: ${requestId}`,
+    );
+
     const { data, error } = await supabase.rpc(
       "auto_match_passenger_with_driver",
       {
@@ -216,9 +324,71 @@ export const autoMatchPassenger = async (requestId: string) => {
       },
     );
 
+    console.log(`Auto-match result for request ${requestId}:`, { data, error });
+
     if (error) {
       console.error("Error auto-matching passenger:", error);
       return { success: false, error, matched: false };
+    }
+
+    // Try again with the find_passengers_for_ride function if auto_match_passenger_with_driver didn't work
+    if (!data) {
+      console.log(
+        `Auto-match didn't find a match, trying to find rides for request ${requestId}`,
+      );
+
+      // First get the request details to find potential rides
+      const { data: request, error: requestError } = await supabase
+        .from("ride_requests")
+        .select("*")
+        .eq("id", requestId)
+        .single();
+
+      if (requestError) {
+        console.error("Error fetching request details:", requestError);
+        return { success: false, error: requestError, matched: false };
+      }
+
+      // Get potential rides
+      const { data: rides, error: ridesError } = await supabase
+        .from("rides")
+        .select("*")
+        .eq("status", "pending")
+        .gte("seats_available", request.seats_needed || 1);
+
+      if (ridesError) {
+        console.error("Error fetching potential rides:", ridesError);
+        return { success: false, error: ridesError, matched: false };
+      }
+
+      console.log(
+        `Found ${rides?.length || 0} potential rides for request ${requestId}`,
+      );
+
+      // Try to match with each ride
+      if (rides && rides.length > 0) {
+        for (const ride of rides) {
+          const { data: matchResult, error: matchError } = await supabase.rpc(
+            "manual_match_ride_request",
+            {
+              p_request_id: requestId,
+              p_ride_id: ride.id,
+            },
+          );
+
+          if (matchError) {
+            console.error(`Error matching with ride ${ride.id}:`, matchError);
+            continue;
+          }
+
+          if (matchResult) {
+            console.log(
+              `Successfully matched request ${requestId} with ride ${ride.id}`,
+            );
+            return { success: true, matched: true };
+          }
+        }
+      }
     }
 
     return { success: true, matched: !!data };

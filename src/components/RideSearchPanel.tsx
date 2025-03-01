@@ -25,11 +25,13 @@ interface RideSearchPanelProps {
     coords: { lat: number; lng: number },
   ) => void;
   onRequestCreated?: () => void;
+  existingRequest?: any;
 }
 
 const RideSearchPanel = ({
   onLocationSelect = () => {},
   onRequestCreated = () => {},
+  existingRequest = null,
 }: RideSearchPanelProps) => {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -49,14 +51,45 @@ const RideSearchPanel = ({
     lng: number;
   } | null>(null);
   const [seats, setSeats] = React.useState("1");
-  const [existingRequest, setExistingRequest] = React.useState<any>(null);
+  const [localExistingRequest, setLocalExistingRequest] =
+    React.useState<any>(null);
 
   const pickupRef = React.useRef<HTMLInputElement>(null);
   const dropoffRef = React.useRef<HTMLInputElement>(null);
 
-  // Check for existing ride requests
+  // Check for existing ride requests or use the one passed as prop
   React.useEffect(() => {
     if (!user) return;
+
+    // If we have an existing request passed as prop, use it
+    if (existingRequest) {
+      setLocalExistingRequest(existingRequest);
+      if (existingRequest.pickup_latitude && existingRequest.pickup_longitude) {
+        setPickupCoords({
+          lat: existingRequest.pickup_latitude,
+          lng: existingRequest.pickup_longitude,
+        });
+        onLocationSelect("pickup", {
+          lat: existingRequest.pickup_latitude,
+          lng: existingRequest.pickup_longitude,
+        });
+      }
+
+      if (
+        existingRequest.destination_latitude &&
+        existingRequest.destination_longitude
+      ) {
+        setDropoffCoords({
+          lat: existingRequest.destination_latitude,
+          lng: existingRequest.destination_longitude,
+        });
+        onLocationSelect("dropoff", {
+          lat: existingRequest.destination_latitude,
+          lng: existingRequest.destination_longitude,
+        });
+      }
+      return;
+    }
 
     const checkExistingRequests = async () => {
       try {
@@ -70,7 +103,7 @@ const RideSearchPanel = ({
         if (error) throw error;
 
         if (data) {
-          setExistingRequest(data);
+          setLocalExistingRequest(data);
           if (data.pickup_latitude && data.pickup_longitude) {
             setPickupCoords({
               lat: data.pickup_latitude,
@@ -98,27 +131,29 @@ const RideSearchPanel = ({
       }
     };
 
-    checkExistingRequests();
+    if (!existingRequest) {
+      checkExistingRequests();
 
-    // Subscribe to status changes
-    const channel = supabase
-      .channel(`ride_requests_${user.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "ride_requests",
-          filter: `rider_id=eq.${user.id}`,
-        },
-        checkExistingRequests,
-      )
-      .subscribe();
+      // Subscribe to status changes
+      const channel = supabase
+        .channel(`ride_requests_${user.id}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "ride_requests",
+            filter: `rider_id=eq.${user.id}`,
+          },
+          checkExistingRequests,
+        )
+        .subscribe();
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [user, onLocationSelect]);
+      return () => {
+        supabase.removeChannel(channel);
+      };
+    }
+  }, [user, onLocationSelect, existingRequest]);
 
   React.useEffect(() => {
     if (!window.google?.maps?.places) return;
@@ -219,10 +254,18 @@ const RideSearchPanel = ({
       if (error) throw error;
 
       // Immediately try to find a match using the backend function
+      console.log(
+        "Attempting to auto-match passenger with driver for request ID:",
+        data.id,
+      );
+
+      // First try the auto_match_passenger_with_driver function
       const { data: matchResult, error: matchError } = await supabase.rpc(
         "auto_match_passenger_with_driver",
         { p_request_id: data.id },
       );
+
+      console.log("Auto-match result:", { matchResult, matchError });
 
       if (matchError) {
         console.error("Error in automatic matching:", matchError);
@@ -233,6 +276,39 @@ const RideSearchPanel = ({
             "A driver has been matched with your ride. Check the Rides tab for details.",
         });
       } else {
+        // If auto_match_passenger_with_driver didn't work, try find_passengers_for_ride
+        console.log(
+          "Auto-match didn't find a match, trying periodic match check",
+        );
+        const { data: periodicResult, error: periodicError } =
+          await supabase.rpc("periodic_match_check");
+
+        if (periodicError) {
+          console.error("Error in periodic match check:", periodicError);
+        } else {
+          console.log("Periodic match check result:", periodicResult);
+
+          // Check if the request was matched after periodic check
+          const { data: requestData, error: requestError } = await supabase
+            .from("ride_requests")
+            .select("status, ride_id")
+            .eq("id", data.id)
+            .single();
+
+          if (
+            !requestError &&
+            requestData.status === "accepted" &&
+            requestData.ride_id
+          ) {
+            toast({
+              title: "Driver Found!",
+              description:
+                "A driver has been matched with your ride. Check the Rides tab for details.",
+            });
+            return;
+          }
+        }
+
         toast({
           title: "Ride Request Submitted",
           description:
@@ -242,7 +318,7 @@ const RideSearchPanel = ({
 
       // Set confirmation and reset state
       setSearchState("completed");
-      setExistingRequest(data);
+      setLocalExistingRequest(data);
 
       // Reset form fields
       setPickup("");
@@ -274,17 +350,17 @@ const RideSearchPanel = ({
   };
 
   const handleCancelRequest = async () => {
-    if (!existingRequest) return;
+    if (!localExistingRequest) return;
 
     try {
       const { error } = await supabase
         .from("ride_requests")
         .delete()
-        .eq("id", existingRequest.id);
+        .eq("id", localExistingRequest.id);
 
       if (error) throw error;
 
-      setExistingRequest(null);
+      setLocalExistingRequest(null);
       toast({
         title: "Ride Request Cancelled",
         description: "Your ride request has been cancelled successfully.",
@@ -303,7 +379,7 @@ const RideSearchPanel = ({
   };
 
   // If there's an existing request, show different UI
-  if (existingRequest) {
+  if (localExistingRequest) {
     return (
       <Card className="w-[400px] p-4 bg-white">
         <div className="space-y-4">
@@ -315,7 +391,7 @@ const RideSearchPanel = ({
           </div>
 
           <div className="space-y-2">
-            {existingRequest.status === "pending" ? (
+            {localExistingRequest.status === "pending" ? (
               <div className="bg-yellow-50 border border-yellow-200 p-3 rounded-md">
                 <p className="text-sm text-yellow-800 font-medium">
                   Searching for drivers
@@ -342,27 +418,27 @@ const RideSearchPanel = ({
             <div className="text-sm">
               <span className="font-medium">Pickup:</span>{" "}
               <span className="text-muted-foreground">
-                {existingRequest.pickup_latitude.toFixed(6)},{" "}
-                {existingRequest.pickup_longitude.toFixed(6)}
+                {localExistingRequest.pickup_latitude.toFixed(6)},{" "}
+                {localExistingRequest.pickup_longitude.toFixed(6)}
               </span>
             </div>
             <div className="text-sm">
               <span className="font-medium">Dropoff:</span>{" "}
               <span className="text-muted-foreground">
-                {existingRequest.destination_latitude.toFixed(6)},{" "}
-                {existingRequest.destination_longitude.toFixed(6)}
+                {localExistingRequest.destination_latitude.toFixed(6)},{" "}
+                {localExistingRequest.destination_longitude.toFixed(6)}
               </span>
             </div>
             <div className="text-sm">
               <span className="font-medium">Scheduled:</span>{" "}
               <span className="text-muted-foreground">
-                {new Date(existingRequest.scheduled_time).toLocaleString()}
+                {new Date(localExistingRequest.scheduled_time).toLocaleString()}
               </span>
             </div>
             <div className="text-sm">
               <span className="font-medium">Seats:</span>{" "}
               <span className="text-muted-foreground">
-                {existingRequest.seats_needed || 1}
+                {localExistingRequest.seats_needed || 1}
               </span>
             </div>
           </div>

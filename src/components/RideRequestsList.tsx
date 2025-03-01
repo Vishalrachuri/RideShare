@@ -149,21 +149,38 @@ export default function RideRequestsList({
     if (!requestToDelete) return;
 
     try {
-      const { error } = await supabase
-        .from("ride_requests")
-        .delete()
-        .eq("id", requestToDelete);
+      // Find the request to check its status
+      const requestToDeleteObj = requests.find((r) => r.id === requestToDelete);
 
-      if (error) {
-        throw error;
+      if (requestToDeleteObj?.status === "pending") {
+        // For pending requests, we cancel them
+        const { error } = await supabase
+          .from("ride_requests")
+          .delete()
+          .eq("id", requestToDelete);
+
+        if (error) throw error;
+
+        toast({
+          title: "Success",
+          description: "Ride request cancelled successfully",
+        });
+      } else {
+        // For completed/cancelled requests, just delete them
+        const { error } = await supabase
+          .from("ride_requests")
+          .delete()
+          .eq("id", requestToDelete);
+
+        if (error) throw error;
+
+        toast({
+          title: "Success",
+          description: "Ride request deleted from history",
+        });
       }
 
       setRequests((prev) => prev.filter((r) => r.id !== requestToDelete));
-      toast({
-        title: "Success",
-        description: "Ride request deleted successfully",
-      });
-
       if (onStatusChange) onStatusChange();
     } catch (error) {
       console.error("Error deleting ride request:", error);
@@ -237,19 +254,17 @@ export default function RideRequestsList({
                   </div>
                   <div className="flex items-center gap-2">
                     <RideStatusDisplay status={request.status} />
-                    {request.status === "pending" && (
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setRequestToDelete(request.id);
-                          setDeleteDialogOpen(true);
-                        }}
-                      >
-                        Cancel
-                      </Button>
-                    )}
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setRequestToDelete(request.id);
+                        setDeleteDialogOpen(true);
+                      }}
+                    >
+                      {request.status === "pending" ? "Cancel" : "Delete"}
+                    </Button>
                   </div>
                 </div>
                 <div className="space-y-2 text-sm">
@@ -326,16 +341,26 @@ export default function RideRequestsList({
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Cancel Ride Request</AlertDialogTitle>
+            <AlertDialogTitle>
+              {requests.find((r) => r.id === requestToDelete)?.status ===
+              "pending"
+                ? "Cancel Ride Request"
+                : "Delete Ride Request"}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to cancel this ride request? This action
-              cannot be undone.
+              {requests.find((r) => r.id === requestToDelete)?.status ===
+              "pending"
+                ? "Are you sure you want to cancel this ride request? This action cannot be undone."
+                : "Are you sure you want to delete this ride request from your history? This action cannot be undone."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>No, Keep It</AlertDialogCancel>
             <AlertDialogAction onClick={handleDeleteRequest}>
-              Yes, Cancel Request
+              {requests.find((r) => r.id === requestToDelete)?.status ===
+              "pending"
+                ? "Yes, Cancel Request"
+                : "Yes, Delete Request"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
