@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { supabase } from "@/lib/supabase";
+import AuthBackground from "./AuthBackground";
+import { KeyRound } from "lucide-react";
 
 export function ResetPasswordForm() {
   const navigate = useNavigate();
@@ -41,45 +43,60 @@ export function ResetPasswordForm() {
   };
 
   return (
-    <div className="max-w-md w-full mx-auto space-y-8 p-6">
-      <div className="text-center">
-        <h2 className="text-2xl font-bold">Reset Password</h2>
-        <p className="text-muted-foreground mt-2">
-          Enter your email to receive a password reset link
-        </p>
-      </div>
+    <div className="flex min-h-screen items-center justify-center">
+      <AuthBackground />
 
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="space-y-2">
-          <Label htmlFor="email">Email</Label>
-          <Input
-            id="email"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
+      <div className="w-full max-w-md z-10">
+        <div className="flex justify-center mb-6">
+          <div className="bg-primary text-primary-foreground p-3 rounded-full">
+            <KeyRound size={32} />
+          </div>
         </div>
 
-        {message && (
-          <p className="text-sm text-center text-muted-foreground">{message}</p>
-        )}
+        <div className="max-w-md w-full mx-auto space-y-8 p-6 backdrop-blur-sm bg-white/90 shadow-xl rounded-lg border-0">
+          <div className="text-center">
+            <h2 className="text-2xl font-bold">Reset Password</h2>
+            <p className="text-muted-foreground mt-2">
+              Enter your email to receive a password reset link
+            </p>
+          </div>
 
-        <Button type="submit" className="w-full" disabled={loading}>
-          {loading ? "Sending..." : "Send Reset Link"}
-        </Button>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="email">Email</Label>
+              <Input
+                id="email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                className="bg-white/50"
+              />
+            </div>
 
-        <p className="text-center text-sm text-muted-foreground">
-          Remember your password?{" "}
-          <Button
-            variant="link"
-            className="p-0"
-            onClick={() => navigate("/login")}
-          >
-            Sign in
-          </Button>
-        </p>
-      </form>
+            {message && (
+              <p className="text-sm text-center text-muted-foreground">
+                {message}
+              </p>
+            )}
+
+            <Button type="submit" className="w-full" disabled={loading}>
+              {loading ? "Sending..." : "Send Reset Link"}
+            </Button>
+
+            <p className="text-center text-sm text-muted-foreground">
+              Remember your password?{" "}
+              <Button
+                variant="link"
+                className="p-0"
+                onClick={() => navigate("/login")}
+              >
+                Sign in
+              </Button>
+            </p>
+          </form>
+        </div>
+      </div>
     </div>
   );
 }

@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { supabase } from "@/lib/supabase";
+import AuthBackground from "./AuthBackground";
+import { Lock } from "lucide-react";
 
 export function UpdatePasswordForm() {
   console.log("Update password form mounted");
@@ -82,35 +84,50 @@ export function UpdatePasswordForm() {
   };
 
   return (
-    <div className="max-w-md w-full mx-auto space-y-8 p-6">
-      <div className="text-center">
-        <h2 className="text-2xl font-bold">Update Password</h2>
-        <p className="text-muted-foreground mt-2">
-          Enter your new password below
-        </p>
-      </div>
+    <div className="flex min-h-screen items-center justify-center">
+      <AuthBackground />
 
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="space-y-2">
-          <Label htmlFor="password">New Password</Label>
-          <Input
-            id="password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            minLength={6}
-          />
+      <div className="w-full max-w-md z-10">
+        <div className="flex justify-center mb-6">
+          <div className="bg-primary text-primary-foreground p-3 rounded-full">
+            <Lock size={32} />
+          </div>
         </div>
 
-        {message && (
-          <p className="text-sm text-center text-muted-foreground">{message}</p>
-        )}
+        <div className="max-w-md w-full mx-auto space-y-8 p-6 backdrop-blur-sm bg-white/90 shadow-xl rounded-lg border-0">
+          <div className="text-center">
+            <h2 className="text-2xl font-bold">Update Password</h2>
+            <p className="text-muted-foreground mt-2">
+              Enter your new password below
+            </p>
+          </div>
 
-        <Button type="submit" className="w-full" disabled={loading}>
-          {loading ? "Updating..." : "Update Password"}
-        </Button>
-      </form>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="password">New Password</Label>
+              <Input
+                id="password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                minLength={6}
+                className="bg-white/50"
+              />
+            </div>
+
+            {message && (
+              <p className="text-sm text-center text-muted-foreground">
+                {message}
+              </p>
+            )}
+
+            <Button type="submit" className="w-full" disabled={loading}>
+              {loading ? "Updating..." : "Update Password"}
+            </Button>
+          </form>
+        </div>
+      </div>
     </div>
   );
 }
