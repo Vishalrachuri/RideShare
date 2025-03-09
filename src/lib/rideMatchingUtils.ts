@@ -241,32 +241,26 @@ export const findPassengersForRide = async (rideId: string) => {
           seats: request.seats_needed,
         });
 
-        // Try to match with more relaxed parameters
-        const { data: isMatch } = await supabase.rpc("check_ride_match", {
-          p_ride_id: rideId,
-          p_request_id: request.id,
-          max_detour_km: 10.0, // Increased from 5.0
-          max_time_diff_minutes: 60, // Increased from 30
-        });
-
-        console.log(`Match result for request ${request.id}:`, isMatch);
-
-        if (isMatch) {
-          // Try to match this request with the ride
-          const { data: matchResult, error: matchError } = await supabase.rpc(
-            "manual_match_ride_request",
-            {
-              p_request_id: request.id,
-              p_ride_id: rideId,
-            },
+        // Use the integrated approach to check compatibility
+        const compatibilityResult =
+          await integratedRideMatching.checkMatchCompatibility(
+            rideId,
+            request.id,
           );
 
-          if (matchError) {
-            console.error(`Error matching request ${request.id}:`, matchError);
-            continue;
-          }
+        console.log(
+          `Match result for request ${request.id}:`,
+          compatibilityResult.isMatch,
+        );
 
-          if (matchResult) {
+        if (compatibilityResult.isMatch) {
+          // Try to match this request with the ride using the integrated approach
+          const matchResult = await integratedRideMatching.matchRequestWithRide(
+            request.id,
+            rideId,
+          );
+
+          if (matchResult.success) {
             console.log(
               `Successfully matched request ${request.id} with ride ${rideId}`,
             );
@@ -293,6 +287,11 @@ export const findPassengersForRide = async (rideId: string) => {
               detail: { requestId: request.id, rideId },
             });
             window.dispatchEvent(matchEvent);
+          } else {
+            console.error(
+              `Error matching request ${request.id}:`,
+              matchResult.details,
+            );
           }
         }
       }
@@ -308,6 +307,8 @@ export const findPassengersForRide = async (rideId: string) => {
   }
 };
 
+import { integratedRideMatching } from "./IntegrateRideMatchingDebug";
+
 /**
  * Attempt to automatically match a passenger with a driver
  */
@@ -317,81 +318,22 @@ export const autoMatchPassenger = async (requestId: string) => {
       `Attempting to auto-match passenger for request ID: ${requestId}`,
     );
 
-    const { data, error } = await supabase.rpc(
-      "auto_match_passenger_with_driver",
-      {
-        p_request_id: requestId,
-      },
-    );
+    // Use the integrated approach for finding and executing the best match
+    const result =
+      await integratedRideMatching.findAndExecuteBestMatch(requestId);
 
-    console.log(`Auto-match result for request ${requestId}:`, { data, error });
+    console.log(`Auto-match result for request ${requestId}:`, result);
 
-    if (error) {
-      console.error("Error auto-matching passenger:", error);
-      return { success: false, error, matched: false };
+    if (!result.success) {
+      console.error("Error auto-matching passenger:", result.details);
+      return { success: false, error: result.details, matched: false };
     }
 
-    // Try again with the find_passengers_for_ride function if auto_match_passenger_with_driver didn't work
-    if (!data) {
-      console.log(
-        `Auto-match didn't find a match, trying to find rides for request ${requestId}`,
-      );
-
-      // First get the request details to find potential rides
-      const { data: request, error: requestError } = await supabase
-        .from("ride_requests")
-        .select("*")
-        .eq("id", requestId)
-        .single();
-
-      if (requestError) {
-        console.error("Error fetching request details:", requestError);
-        return { success: false, error: requestError, matched: false };
-      }
-
-      // Get potential rides
-      const { data: rides, error: ridesError } = await supabase
-        .from("rides")
-        .select("*")
-        .eq("status", "pending")
-        .gte("seats_available", request.seats_needed || 1);
-
-      if (ridesError) {
-        console.error("Error fetching potential rides:", ridesError);
-        return { success: false, error: ridesError, matched: false };
-      }
-
-      console.log(
-        `Found ${rides?.length || 0} potential rides for request ${requestId}`,
-      );
-
-      // Try to match with each ride
-      if (rides && rides.length > 0) {
-        for (const ride of rides) {
-          const { data: matchResult, error: matchError } = await supabase.rpc(
-            "manual_match_ride_request",
-            {
-              p_request_id: requestId,
-              p_ride_id: ride.id,
-            },
-          );
-
-          if (matchError) {
-            console.error(`Error matching with ride ${ride.id}:`, matchError);
-            continue;
-          }
-
-          if (matchResult) {
-            console.log(
-              `Successfully matched request ${requestId} with ride ${ride.id}`,
-            );
-            return { success: true, matched: true };
-          }
-        }
-      }
-    }
-
-    return { success: true, matched: !!data };
+    return {
+      success: true,
+      matched: result.matched,
+      details: result.details,
+    };
   } catch (error) {
     console.error("Exception in autoMatchPassenger:", error);
     return { success: false, error, matched: false };

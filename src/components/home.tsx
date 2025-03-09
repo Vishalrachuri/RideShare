@@ -5,6 +5,7 @@ import MainDrawer from "./MainDrawer";
 import { useAuth } from "@/lib/AuthContext";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/components/ui/use-toast";
+import MatchingDebugLink from "./MatchingDebugLink";
 
 interface HomeProps {
   userName?: string;
@@ -155,6 +156,9 @@ const Home = ({
         onMenuClick={() => setDrawerOpen(true)}
       />
       <main className="pt-16">
+        <div className="absolute top-20 right-4 z-10">
+          <MatchingDebugLink />
+        </div>
         <MapView
           userType={userType}
           center={{ lat: 33.2148, lng: -97.1331 }} // Denton, TX

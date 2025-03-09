@@ -120,25 +120,26 @@ export const checkRideRequest = async (requestId: string) => {
   }
 };
 
+import { integratedRideMatching } from "./IntegrateRideMatchingDebug";
+
 /**
  * Check the match quality between a ride and a request
  * This is a diagnostic function to see why matching may have failed
  */
 export const checkMatchQuality = async (requestId: string, rideId: string) => {
   try {
-    const { data, error } = await supabase.rpc("check_ride_match", {
-      p_ride_id: rideId,
-      p_request_id: requestId,
-      max_detour_km: 5.0,
-      max_time_diff_minutes: 30,
-    });
+    // Use the integrated approach for checking match compatibility
+    const result = await integratedRideMatching.checkMatchCompatibility(
+      rideId,
+      requestId,
+    );
 
-    if (error) {
-      console.error("Error checking match quality:", error);
-      return { success: false, error, isMatch: false };
+    if (!result.isMatch) {
+      console.log("Match quality check failed:", result.details);
+      return { success: true, isMatch: false, details: result.details };
     }
 
-    return { success: true, isMatch: !!data };
+    return { success: true, isMatch: true, details: result.details };
   } catch (error) {
     console.error("Exception in checking match quality:", error);
     return { success: false, error, isMatch: false };

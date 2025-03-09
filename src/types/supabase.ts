@@ -9,38 +9,37 @@ export type Json =
 export type Database = {
   public: {
     Tables: {
-      chat_groups: {
+      driver_locations: {
         Row: {
-          created_at: string | null
-          created_by: string | null
-          description: string | null
+          current_location: unknown
+          driver_id: string
           id: string
-          latitude: number
-          location_name: string | null
-          longitude: number
-          name: string
+          is_available: boolean | null
+          last_updated: string | null
         }
         Insert: {
-          created_at?: string | null
-          created_by?: string | null
-          description?: string | null
+          current_location: unknown
+          driver_id: string
           id?: string
-          latitude: number
-          location_name?: string | null
-          longitude: number
-          name: string
+          is_available?: boolean | null
+          last_updated?: string | null
         }
         Update: {
-          created_at?: string | null
-          created_by?: string | null
-          description?: string | null
+          current_location?: unknown
+          driver_id?: string
           id?: string
-          latitude?: number
-          location_name?: string | null
-          longitude?: number
-          name?: string
+          is_available?: boolean | null
+          last_updated?: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "driver_locations_driver_id_fkey"
+            columns: ["driver_id"]
+            isOneToOne: true
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       driver_verifications: {
         Row: {
@@ -85,99 +84,6 @@ export type Database = {
             columns: ["driver_id"]
             isOneToOne: false
             referencedRelation: "users"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      global_chat_messages: {
-        Row: {
-          content: string
-          created_at: string | null
-          id: string
-          region_id: string | null
-          sender_id: string | null
-        }
-        Insert: {
-          content: string
-          created_at?: string | null
-          id?: string
-          region_id?: string | null
-          sender_id?: string | null
-        }
-        Update: {
-          content?: string
-          created_at?: string | null
-          id?: string
-          region_id?: string | null
-          sender_id?: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "global_chat_messages_region_id_fkey"
-            columns: ["region_id"]
-            isOneToOne: false
-            referencedRelation: "regions"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      group_members: {
-        Row: {
-          created_at: string | null
-          group_id: string | null
-          id: string
-          user_id: string | null
-        }
-        Insert: {
-          created_at?: string | null
-          group_id?: string | null
-          id?: string
-          user_id?: string | null
-        }
-        Update: {
-          created_at?: string | null
-          group_id?: string | null
-          id?: string
-          user_id?: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "group_members_group_id_fkey"
-            columns: ["group_id"]
-            isOneToOne: false
-            referencedRelation: "chat_groups"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      group_messages: {
-        Row: {
-          content: string
-          created_at: string | null
-          group_id: string | null
-          id: string
-          sender_id: string | null
-        }
-        Insert: {
-          content: string
-          created_at?: string | null
-          group_id?: string | null
-          id?: string
-          sender_id?: string | null
-        }
-        Update: {
-          content?: string
-          created_at?: string | null
-          group_id?: string | null
-          id?: string
-          sender_id?: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "group_messages_group_id_fkey"
-            columns: ["group_id"]
-            isOneToOne: false
-            referencedRelation: "chat_groups"
             referencedColumns: ["id"]
           },
         ]
@@ -269,6 +175,33 @@ export type Database = {
           },
         ]
       }
+      profiles: {
+        Row: {
+          created_at: string | null
+          email: string | null
+          full_name: string | null
+          id: string
+          updated_at: string | null
+          user_type: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          email?: string | null
+          full_name?: string | null
+          id: string
+          updated_at?: string | null
+          user_type?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          email?: string | null
+          full_name?: string | null
+          id?: string
+          updated_at?: string | null
+          user_type?: string | null
+        }
+        Relationships: []
+      }
       ratings: {
         Row: {
           created_at: string
@@ -320,33 +253,6 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
-      }
-      regions: {
-        Row: {
-          created_at: string | null
-          id: string
-          latitude: number
-          longitude: number
-          name: string
-          radius: number
-        }
-        Insert: {
-          created_at?: string | null
-          id?: string
-          latitude: number
-          longitude: number
-          name: string
-          radius: number
-        }
-        Update: {
-          created_at?: string | null
-          id?: string
-          latitude?: number
-          longitude?: number
-          name?: string
-          radius?: number
-        }
-        Relationships: []
       }
       ride_requests: {
         Row: {
@@ -856,6 +762,8 @@ export type Database = {
       auto_match_passenger_with_driver: {
         Args: {
           p_request_id: string
+          max_detour_km?: number
+          max_time_diff_minutes?: number
         }
         Returns: boolean
       }
@@ -986,10 +894,6 @@ export type Database = {
         }
         Returns: boolean
       }
-      clean_duplicate_ride_requests: {
-        Args: Record<PropertyKey, never>
-        Returns: undefined
-      }
       cleanup_old_records: {
         Args: Record<PropertyKey, never>
         Returns: number
@@ -999,25 +903,6 @@ export type Database = {
           p_ride_id: string
         }
         Returns: boolean
-      }
-      confirm_dropoff: {
-        Args: {
-          p_request_id: string
-        }
-        Returns: undefined
-      }
-      confirm_pickup: {
-        Args: {
-          p_request_id: string
-        }
-        Returns: undefined
-      }
-      confirm_ride_by_driver: {
-        Args: {
-          p_request_id: string
-          p_confirm: boolean
-        }
-        Returns: undefined
       }
       disablelongtransactions: {
         Args: Record<PropertyKey, never>
@@ -1085,6 +970,8 @@ export type Database = {
         Args: {
           p_ride_id: string
           max_passengers?: number
+          max_detour_km?: number
+          max_time_diff_minutes?: number
         }
         Returns: number
       }
@@ -1651,59 +1538,26 @@ export type Database = {
         Args: {
           p_request_id: string
           p_ride_id: string
+          max_detour_km?: number
+          max_time_diff_minutes?: number
         }
         Returns: boolean
       }
-      match_ride_with_request:
-        | {
-            Args: {
-              p_request_id: string
-            }
-            Returns: undefined
-          }
-        | {
-            Args: {
-              p_ride_id: string
-              p_request_id: string
-              p_seats_needed: number
-            }
-            Returns: undefined
-          }
-      match_rides_advanced:
-        | {
-            Args: {
-              p_request_id: string
-              max_detour_km?: number
-              max_time_diff_minutes?: number
-            }
-            Returns: {
-              ride_id: string
-              match_score: number
-              route_overlap: number
-              pickup_distance: number
-              time_difference: number
-              available_seats: number
-            }[]
-          }
-        | {
-            Args: {
-              p_request_id: string
-              max_detour_km?: number
-              max_time_diff_minutes?: number
-              min_match_score?: number
-            }
-            Returns: {
-              ride_id: string
-              match_score: number
-              route_overlap: number
-              pickup_distance: number
-              time_difference: number
-              available_seats: number
-            }[]
-          }
-      notify_unmatched_requests: {
-        Args: Record<PropertyKey, never>
-        Returns: undefined
+      match_rides_advanced: {
+        Args: {
+          p_request_id: string
+          max_detour_km?: number
+          max_time_diff_minutes?: number
+          min_match_score?: number
+        }
+        Returns: {
+          ride_id: string
+          match_score: number
+          route_overlap: number
+          pickup_distance: number
+          time_difference: number
+          available_seats: number
+        }[]
       }
       path: {
         Args: {
@@ -1966,23 +1820,6 @@ export type Database = {
       postgis_wagyu_version: {
         Args: Record<PropertyKey, never>
         Returns: string
-      }
-      reattempt_matching: {
-        Args: {
-          p_request_id: string
-        }
-        Returns: undefined
-      }
-      reject_ride_request: {
-        Args: {
-          p_ride_id: string
-          p_request_id: string
-        }
-        Returns: undefined
-      }
-      retry_match_pending_requests: {
-        Args: Record<PropertyKey, never>
-        Returns: undefined
       }
       spheroid_in: {
         Args: {

@@ -1,5 +1,7 @@
 import { supabase } from "./supabase";
 
+import { integratedRideMatching } from "./IntegrateRideMatchingDebug";
+
 /**
  * This function will manually trigger the auto-matching process for a specific ride request
  */
@@ -7,20 +9,18 @@ export const triggerAutoMatch = async (requestId: string) => {
   try {
     console.log(`Manually triggering auto-match for request ${requestId}`);
 
-    // First try the auto_match_passenger_with_driver function
-    const { data: autoMatchResult, error: autoMatchError } = await supabase.rpc(
-      "auto_match_passenger_with_driver",
-      { p_request_id: requestId },
-    );
+    // Use the integrated approach for finding and executing the best match
+    const result =
+      await integratedRideMatching.findAndExecuteBestMatch(requestId);
 
-    if (autoMatchError) {
-      console.error("Error in auto-matching:", autoMatchError);
-      return { success: false, error: autoMatchError, matched: false };
+    if (!result.success) {
+      console.error("Error in auto-matching:", result.details);
+      return { success: false, error: result.details, matched: false };
     }
 
-    if (autoMatchResult) {
+    if (result.matched) {
       console.log(`Successfully auto-matched request ${requestId}`);
-      return { success: true, matched: true };
+      return { success: true, matched: true, details: result.details };
     }
 
     // If auto-match didn't work, try the periodic_match_check function

@@ -17,6 +17,8 @@ import ApiKeyTest from "./components/ApiKeyTest";
 import { ResetPasswordForm } from "./components/auth/ResetPasswordForm";
 import { UpdatePasswordForm } from "./components/auth/UpdatePasswordForm";
 import { AuthProvider, useAuth } from "./lib/AuthContext";
+import RideMatchingDebugPage from "./pages/RideMatchingDebugPage";
+import RideMatchingDebugScreen from "./components/RideMatchingDebugScreen";
 import routes from "tempo-routes";
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
@@ -64,6 +66,14 @@ function App() {
           />
           <Route path="/auth/callback" element={<AuthCallback />} />
           <Route path="/api-test" element={<ApiKeyTest />} />
+          <Route
+            path="/debug/ride-matching"
+            element={<RideMatchingDebugPage />}
+          />
+          <Route
+            path="/debug/ride-matching/advanced"
+            element={<RideMatchingDebugScreen />}
+          />
           {/* Tempo routes */}
           {import.meta.env.VITE_TEMPO && (
             <Route path="/tempobook/*" element={<></>} />

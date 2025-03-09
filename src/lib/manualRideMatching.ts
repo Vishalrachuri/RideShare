@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { integratedRideMatching } from "./IntegrateRideMatchingDebug";
 
 /**
  * Manually matches a ride request with a ride
@@ -11,19 +12,19 @@ export const manuallyMatchRideRequest = async (
   console.log(`Manually matching request ${requestId} with ride ${rideId}`);
 
   try {
-    // Call the backend RPC function for manual matching
-    const { data, error } = await supabase.rpc("manual_match_ride_request", {
-      p_request_id: requestId,
-      p_ride_id: rideId,
-    });
+    // Use the integrated approach
+    const result = await integratedRideMatching.matchRequestWithRide(
+      requestId,
+      rideId,
+    );
 
-    if (error) {
-      console.error("Error in manual ride matching:", error);
-      return { success: false, error };
+    if (!result.success) {
+      console.error("Error in ride matching:", result.details);
+      return { success: false, error: result.details };
     }
 
-    console.log("Successfully matched ride request:", data);
-    return { success: true, data };
+    console.log("Successfully matched ride request:", result.details);
+    return { success: true, data: result.details };
   } catch (error) {
     console.error("Exception in manual ride matching:", error);
     return { success: false, error };
